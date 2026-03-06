@@ -1,0 +1,30 @@
+{
+  "name": "voice-humanizer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npm run tauri:dev",
+    "build": "npm run tauri:build",
+    "build:web": "vite build",
+    "tauri:dev": "node scripts/tauri-runner.mjs dev --no-dev-server",
+    "tauri:build": "node scripts/tauri-runner.mjs build",
+    "ci": "npm run test && npm run build:web",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.10.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.10.1",
+    "@testing-library/jest-dom": "^6.7.0",
+    "@testing-library/react": "^16.2.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "jsdom": "^26.0.0",
+    "vite": "^5.4.0",
+    "vitest": "^2.1.8"
+  }
+}
