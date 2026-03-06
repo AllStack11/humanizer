@@ -1,10 +1,38 @@
 import { WRITING_SAMPLE_TYPES, DEFAULT_SAMPLE_TYPE, PROFILE_OPTIONS, PRIMARY_PROFILE_ID } from '../constants/index.js';
 
+function normalizeSampleTypeKey(rawValue = "") {
+  return String(rawValue)
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+export function resolveSampleType(rawType) {
+  if (typeof rawType !== "string" || !rawType.trim()) return DEFAULT_SAMPLE_TYPE;
+  const candidate = rawType.trim();
+  if (WRITING_SAMPLE_TYPES.some((entry) => entry.value === candidate)) return candidate;
+
+  const normalizedInput = normalizeSampleTypeKey(candidate);
+  for (const type of WRITING_SAMPLE_TYPES) {
+    if (normalizeSampleTypeKey(type.label) === normalizedInput) return type.value;
+    if (normalizeSampleTypeKey(type.shortLabel) === normalizedInput) return type.value;
+  }
+
+  if (["question", "questions", "qa", "q a", "q and a", "question answer", "question answers"].includes(normalizedInput)) {
+    return "question";
+  }
+  if (["text convo", "text conversation", "text msg", "text message", "texts"].includes(normalizedInput)) {
+    return "text-convo";
+  }
+  return DEFAULT_SAMPLE_TYPE;
+}
+
 export function normalizeSampleSlot(slot, fallbackId) {
   return {
     id: slot?.id ?? fallbackId,
     text: slot?.text || "",
-    type: WRITING_SAMPLE_TYPES.some(t => t.value === slot?.type) ? slot.type : DEFAULT_SAMPLE_TYPE,
+    type: resolveSampleType(slot?.type),
   };
 }
 
@@ -38,7 +66,7 @@ export function normalizeStoredStyles(rawStyles) {
       name: profileName,
       sampleEntries,
       samples: sampleEntries.map(sample => sample.text),
-      sampleCount: style.sampleCount || sampleEntries.length,
+      sampleCount: sampleEntries.length,
     };
   }
   if (!Object.keys(normalized).length) return normalized;
@@ -74,5 +102,6 @@ export function computeProfileHealth(profileRecord) {
 }
 
 export function hasTrainedProfile(profile) {
-  return !!(profile?.profile && (profile.sampleCount || 0) > 0);
+  const entryCount = Array.isArray(profile?.sampleEntries) ? profile.sampleEntries.length : 0;
+  return !!(profile?.profile && entryCount > 0);
 }

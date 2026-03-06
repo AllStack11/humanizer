@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { load, save } from '../lib/storage.js';
-import { normalizeSampleSlot, getFilledSlots } from '../utils/profile.js';
+import { normalizeSampleSlot, getFilledSlots, resolveSampleType } from '../utils/profile.js';
 import { WRITING_SAMPLE_TYPES, DEFAULT_SAMPLE_TYPE, DEFAULT_SLOTS, STYLE_MODAL_DRAFT_KEY } from '../constants/index.js';
 import { S } from '../styles/index.js';
 
@@ -26,11 +26,49 @@ export default function StyleModal({ hasProfile, loading, onTrainProfile, onClos
     ]);
   }
 
-  function appendPoolText(rawText, type = poolType) {
+  function splitPoolTextIntoPieces(rawText, type) {
     const raw = (rawText || "").trim();
-    if (!raw) return;
-    const chunks = raw.split(/\n{2,}/).map((chunk) => chunk.trim()).filter(Boolean);
+    if (!raw) return [];
+
+    const chunks = raw
+      .split(/\n{2,}/)
+      .map((chunk) => chunk.trim())
+      .filter(Boolean);
     const pieces = chunks.length > 1 ? chunks : [raw];
+    if (type !== "question") return pieces;
+
+    const looksQuestionLike = (text) => {
+      const trimmed = text.trim();
+      return /^q(?:uestion)?\s*[:\-]/i.test(trimmed) || trimmed.endsWith("?");
+    };
+
+    const hasInlineQaPair = (text) => /q(?:uestion)?\s*[:\-][\s\S]*a(?:nswer)?\s*[:\-]/i.test(text);
+
+    const combined = [];
+    for (let i = 0; i < pieces.length; i += 1) {
+      const current = pieces[i];
+      const next = pieces[i + 1];
+
+      if (hasInlineQaPair(current)) {
+        combined.push(current);
+        continue;
+      }
+
+      if (looksQuestionLike(current) && next) {
+        combined.push(`${current}\n\n${next}`);
+        i += 1;
+        continue;
+      }
+
+      combined.push(current);
+    }
+
+    return combined;
+  }
+
+  function appendPoolText(rawText, type = poolType) {
+    const pieces = splitPoolTextIntoPieces(rawText, type);
+    if (!pieces.length) return;
 
     setTrainSlots((prev) => {
       let idCursor = nextSlotId(prev);
@@ -44,6 +82,12 @@ export default function StyleModal({ hasProfile, loading, onTrainProfile, onClos
 
   useEffect(() => {
     (async () => {
+      if (!hasProfile) {
+        setTrainSlots(initialSlots);
+        setPoolInput("");
+        setPoolType(DEFAULT_SAMPLE_TYPE);
+        return;
+      }
       const draft = await load(STYLE_MODAL_DRAFT_KEY);
       if (!draft || typeof draft !== "object") return;
       if (Array.isArray(draft.trainSlots) && draft.trainSlots.length) {
@@ -53,11 +97,9 @@ export default function StyleModal({ hasProfile, loading, onTrainProfile, onClos
         setTrainSlots(initialSlots);
       }
       if (typeof draft.poolInput === "string") setPoolInput(draft.poolInput);
-      if (typeof draft.poolType === "string" && WRITING_SAMPLE_TYPES.some((type) => type.value === draft.poolType)) {
-        setPoolType(draft.poolType);
-      }
+      if (typeof draft.poolType === "string") setPoolType(resolveSampleType(draft.poolType));
     })();
-  }, []);
+  }, [hasProfile]);
 
   useEffect(() => {
     save(STYLE_MODAL_DRAFT_KEY, {
@@ -105,7 +147,12 @@ export default function StyleModal({ hasProfile, loading, onTrainProfile, onClos
 
   async function handleSubmit() {
     const ok = await onTrainProfile(trainSlots);
-    if (ok) resetDraft();
+    if (!ok) return;
+    if (hasProfile) {
+      setPoolInput("");
+      return;
+    }
+    resetDraft();
   }
 
   return (

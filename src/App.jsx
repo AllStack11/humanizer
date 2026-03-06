@@ -46,6 +46,8 @@ import LoadingOverlay from './components/LoadingOverlay.jsx';
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
+  const RUNTIME_API_CONFIG_KEY = "runtime-api-config-v1";
+
   function getErrorMessage(error, fallback = "Unexpected error.") {
     if (error instanceof Error && error.message) return error.message;
     if (typeof error === "string" && error.trim()) return error;
@@ -55,6 +57,10 @@ export default function App() {
       try { return JSON.stringify(error); } catch {}
     }
     return fallback;
+  }
+
+  function isMissingApiKeyError(message) {
+    return typeof message === "string" && /api key not found/i.test(message);
   }
 
   // Core
@@ -85,6 +91,7 @@ export default function App() {
   const [variants, setVariants] = useState([]);
   const [selectedSentenceIndex, setSelectedSentenceIndex] = useState(null);
   const [showDiff, setShowDiff] = useState(true);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Spell check
   const [spellResult, setSpellResult]     = useState(null);
@@ -111,6 +118,9 @@ export default function App() {
   const [apiKeyRequired, setApiKeyRequired] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [apiKeySaving, setApiKeySaving] = useState(false);
+  const [apiUrlInput, setApiUrlInput] = useState("");
+  const [apiKeyFileInput, setApiKeyFileInput] = useState("");
+  const [runtimeConfig, setRuntimeConfig] = useState({ apiUrl: "", apiKeyFile: "" });
 
   // Load persisted data
   useEffect(() => {
@@ -128,8 +138,16 @@ export default function App() {
         const storedTs      = await load("cliches-ts-v3");
         const storedTrouble = await load("trouble-words-v1");
         const storedWriterDraft = await load(WRITER_DRAFT_KEY);
+        const storedRuntimeConfig = await load(RUNTIME_API_CONFIG_KEY);
         const storedModel = await load(MODEL_PREF_KEY);
         const storedCustomModels = await load(CUSTOM_MODELS_KEY);
+        const resolvedRuntimeConfig = {
+          apiUrl: typeof storedRuntimeConfig?.apiUrl === "string" ? storedRuntimeConfig.apiUrl.trim() : "",
+          apiKeyFile: typeof storedRuntimeConfig?.apiKeyFile === "string" ? storedRuntimeConfig.apiKeyFile.trim() : "",
+        };
+        setRuntimeConfig(resolvedRuntimeConfig);
+        setApiUrlInput(resolvedRuntimeConfig.apiUrl);
+        setApiKeyFileInput(resolvedRuntimeConfig.apiKeyFile);
         let stylesSource = "localStorage";
         let resolvedStyles = storedStyles ? normalizeStoredStyles(storedStyles) : {};
         if (!Object.keys(resolvedStyles).length) {
@@ -190,7 +208,7 @@ export default function App() {
         let apiKeySource = isTauriRuntime() ? "missing" : "web";
         if (isTauriRuntime()) {
           try {
-            const keyStatus = await getApiKeyStatus();
+            const keyStatus = await getApiKeyStatus(resolvedRuntimeConfig);
             hasKey = keyStatus.hasKey;
             apiKeySource = keyStatus.source;
             if (!hasKey) {
@@ -261,6 +279,7 @@ export default function App() {
     if (!backupSyncReadyRef.current) return;
     saveStylesBackupWithRetry(styles);
   }, [styles]);
+  useEffect(() => { save(RUNTIME_API_CONFIG_KEY, runtimeConfig); }, [runtimeConfig]);
 
   useEffect(() => {
     if (backupStatus !== "ok") return;
@@ -344,6 +363,73 @@ export default function App() {
     reader.readAsText(file);
   }
 
+  async function resetActiveProfile() {
+    const existingRecord = styles[activeProfileId];
+    const existing = hasTrainedProfile(existingRecord) ? existingRecord : null;
+    const selectedProfile = PROFILE_OPTIONS.find((profile) => profile.id === activeProfileId);
+    const profileName = selectedProfile?.label || "Selected";
+    if (!existing) {
+      setError("No saved profile to reset.");
+      return;
+    }
+
+    const sampleCount = Array.isArray(existing.sampleEntries) ? existing.sampleEntries.length : 0;
+    const confirmStep1 = window.confirm(
+      `Reset ${profileName} profile? This deletes ${sampleCount} saved sample${sampleCount === 1 ? "" : "s"} and voice settings.`
+    );
+    if (!confirmStep1) return;
+
+    const confirmStep2 = window.confirm("Are you absolutely sure? This cannot be undone.");
+    if (!confirmStep2) return;
+
+    const confirmStep3 = window.confirm("Final check: continue and permanently delete this profile?");
+    if (!confirmStep3) return;
+
+    const expectedPhrase = `RESET ${profileName.toUpperCase()}`;
+    const typed = window.prompt(`Type "${expectedPhrase}" to confirm deletion.`, "");
+    if ((typed || "").trim().toUpperCase() !== expectedPhrase) {
+      setStatus("Profile reset cancelled.");
+      setTimeout(() => setStatus(""), 1400);
+      return;
+    }
+
+    save(STYLE_MODAL_DRAFT_KEY, null);
+
+    const nextStyles = {
+      ...styles,
+      [activeProfileId]: {
+        id: activeProfileId,
+        name: profileName,
+        profile: null,
+        sampleEntries: [],
+        samples: [],
+        sampleCount: 0,
+        createdAt: styles[activeProfileId]?.createdAt || new Date().toISOString(),
+      },
+    };
+
+    setStyles(nextStyles);
+    await save("styles-v3", nextStyles);
+    await saveStylesBackupWithRetry(nextStyles);
+
+    setOutputText("");
+    setOutputHistory([]);
+    setHistoryIndex(-1);
+    setVariants([]);
+    setSelectedSentenceIndex(null);
+    setSpellResult(null);
+    setExpandedErrorPill(null);
+    setStyleModalOpen(false);
+    setStatus(`${profileName} profile reset to 0 samples.`);
+    setTimeout(() => setStatus(""), 1500);
+
+    logDiagnosticEvent("profile:reset", {
+      profileId: activeProfileId,
+      profileName,
+      sampleCount,
+    }).catch(() => {});
+  }
+
   async function saveApiKey() {
     const key = apiKeyInput.trim();
     if (!key) {
@@ -353,12 +439,22 @@ export default function App() {
     setApiKeySaving(true);
     setError("");
     try {
-      await storeApiKey(key);
+      await storeApiKey(key, runtimeConfig);
       setApiKeyRequired(false);
       setApiKeyModalOpen(false);
       setApiKeyInput("");
       setStatus("API key saved.");
       setTimeout(() => setStatus(""), 1200);
+
+      // Best-effort verification after UI close; avoid blocking save UX on
+      // keychain backends that report state with a delay.
+      getApiKeyStatus(runtimeConfig)
+        .then((status) => {
+          if (!status?.hasKey) {
+            setError("API key may not have persisted in local secret storage. You can retry save from settings.");
+          }
+        })
+        .catch(() => {});
     } catch (e) {
       setError("Failed to save API key: " + getErrorMessage(e));
     } finally {
@@ -370,7 +466,7 @@ export default function App() {
     setApiKeySaving(true);
     setError("");
     try {
-      await clearStoredApiKey();
+      await clearStoredApiKey(runtimeConfig);
       setApiKeyRequired(true);
       setApiKeyModalOpen(true);
       setStatus("API key removed.");
@@ -386,15 +482,45 @@ export default function App() {
   async function refreshCliches() {
     setClicheFetching(true);
     try {
-      const raw = await llm("", CLICHE_PROMPT, 800, selectedModel);
+      const raw = await llm("", CLICHE_PROMPT, 1400, selectedModel, runtimeConfig);
       const fresh = JSON.parse(raw.replace(/```json|```/g,"").trim());
       if (Array.isArray(fresh) && fresh.length > 20) {
         const merged = [...new Set([...BASE_CLICHES, ...fresh])];
         setCliches(merged); const now = new Date(); setClichesUpdatedAt(now);
         await save("cliches-v3", merged); await save("cliches-ts-v3", now.toISOString());
       }
-    } catch {}
+    } catch (e) {
+      const message = getErrorMessage(e);
+      if (isMissingApiKeyError(message)) {
+        setApiKeyRequired(true);
+        setApiKeyModalOpen(true);
+      }
+    }
     setClicheFetching(false);
+  }
+
+  function parseJsonFromModelOutput(raw) {
+    const cleaned = String(raw || "").replace(/```json|```/gi, "").trim();
+    return JSON.parse(cleaned);
+  }
+
+  function dedupeSampleEntries(entries) {
+    const seen = new Set();
+    const deduped = [];
+    for (const rawEntry of entries || []) {
+      const normalized = normalizeSampleSlot(rawEntry, deduped.length + 1);
+      const text = normalized.text.trim();
+      if (!text) continue;
+      const key = `${normalized.type}::${text.toLowerCase().replace(/\s+/g, " ")}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push({
+        ...normalized,
+        id: deduped.length + 1,
+        text,
+      });
+    }
+    return deduped;
   }
 
   // ── Profile onboarding / evolution ──
@@ -411,10 +537,52 @@ export default function App() {
 
     try {
       const formatted = filled.map((sample, i) => formatSampleForPrompt(sample, i)).join("\n\n");
-      const raw = existing
-        ? await llm(STYLE_MERGE_SYS, `Existing profile:\n${JSON.stringify(existing.profile, null, 2)}\n\nNew samples:\n${formatted}`, 1400, selectedModel)
-        : await llm(STYLE_ANALYZE_SYS, `Analyze:\n\n${formatted}`, 1400, selectedModel);
-      const profile = JSON.parse(raw.replace(/```json|```/g,"").trim());
+      const baseUserPrompt = existing
+        ? `Existing profile:\n${JSON.stringify(existing.profile || {})}\n\nNew samples:\n${formatted}`
+        : `Analyze:\n\n${formatted}`;
+      const baseSystemPrompt = existing ? STYLE_MERGE_SYS : STYLE_ANALYZE_SYS;
+      const attempts = [
+        {
+          maxTokens: existing ? 3200 : 2400,
+          userPrompt: baseUserPrompt,
+          systemPrompt: baseSystemPrompt,
+        },
+        {
+          maxTokens: existing ? 4800 : 3200,
+          userPrompt: `${baseUserPrompt}\n\nReturn ONLY a valid JSON object with all braces/quotes closed. No markdown. No prose.`,
+          systemPrompt: `${baseSystemPrompt}\nOutput must be a single valid JSON object with no text before or after it.`,
+        },
+      ];
+
+      let profile = null;
+      let lastParseError = null;
+      for (let attempt = 0; attempt < attempts.length; attempt += 1) {
+        const plan = attempts[attempt];
+        const raw = await llm(plan.systemPrompt, plan.userPrompt, plan.maxTokens, selectedModel, runtimeConfig);
+        try {
+          profile = parseJsonFromModelOutput(raw);
+          break;
+        } catch (parseErr) {
+          lastParseError = parseErr;
+          logDiagnosticEvent(
+            "profile:train:json_parse_failed",
+            {
+              attempt: attempt + 1,
+              mode: existing ? "merge" : "analyze",
+              model: selectedModel,
+              maxTokens: plan.maxTokens,
+              responseChars: String(raw || "").length,
+              responseTail: String(raw || "").slice(-180),
+            },
+            "failed",
+            { error: getErrorMessage(parseErr) }
+          ).catch(() => {});
+        }
+      }
+
+      if (!profile) {
+        throw (lastParseError || new Error("Failed to parse profile JSON from model response."));
+      }
 
       setStyles(prev => {
         const existingProfile = prev[activeProfileId];
@@ -423,7 +591,7 @@ export default function App() {
               ? existingProfile.sampleEntries.map((sample, i) => normalizeSampleSlot(sample, i + 1))
               : (Array.isArray(existingProfile.samples) ? existingProfile.samples : []).map((text, i) => normalizeSampleSlot({ id: i + 1, text }, i + 1)))
           : [];
-        const sampleEntries = [...existingSamples, ...filled];
+        const sampleEntries = dedupeSampleEntries([...existingSamples, ...filled]);
         const createdAt = existingProfile?.createdAt || new Date().toISOString();
 
         return {
@@ -445,7 +613,12 @@ export default function App() {
       setTimeout(() => { setStatus(""); setStyleModalOpen(false); }, 900);
       return true;
     } catch (e) {
-      setError("Failed: " + getErrorMessage(e));
+      const message = getErrorMessage(e);
+      if (isMissingApiKeyError(message)) {
+        setApiKeyRequired(true);
+        setApiKeyModalOpen(true);
+      }
+      setError("Failed: " + message);
       return false;
     } finally {
       setLoading(false);
@@ -483,12 +656,20 @@ export default function App() {
         applyPromptDecorators(HUMANIZE_SYS(activeProfile.profile, toneLevel, stripCliches ? cliches : BASE_CLICHES.slice(0,10))),
         `Rewrite:\n\n${inputText}`,
         (_, full) => setOutputText(full),
-        1400,
-        selectedModel
+        2400,
+        selectedModel,
+        runtimeConfig
       );
       commitOutput(out);
       setStatus("");
-    } catch (e) { setError("Failed: " + getErrorMessage(e)); }
+    } catch (e) {
+      const message = getErrorMessage(e);
+      if (isMissingApiKeyError(message)) {
+        setApiKeyRequired(true);
+        setApiKeyModalOpen(true);
+      }
+      setError("Failed: " + message);
+    }
     finally { setLoading(false); }
   }
 
@@ -505,12 +686,20 @@ export default function App() {
         applyPromptDecorators(ELABORATE_SYS(activeProfile.profile, toneLevel, elabDepth)),
         `Elaborate on:\n\n${inputText}`,
         (_, full) => setOutputText(full),
-        1400,
-        selectedModel
+        2400,
+        selectedModel,
+        runtimeConfig
       );
       commitOutput(out);
       setStatus("");
-    } catch (e) { setError("Failed: " + getErrorMessage(e)); }
+    } catch (e) {
+      const message = getErrorMessage(e);
+      if (isMissingApiKeyError(message)) {
+        setApiKeyRequired(true);
+        setApiKeyModalOpen(true);
+      }
+      setError("Failed: " + message);
+    }
     finally { setLoading(false); }
   }
 
@@ -524,15 +713,21 @@ export default function App() {
       const raw = await llm(
         applyPromptDecorators(HUMANIZE_SYS(activeProfile.profile, toneLevel, stripCliches ? cliches : BASE_CLICHES.slice(0, 10))),
         `Create exactly 3 rewrite variants of this text.\nReturn ONLY JSON array of strings.\n\nText:\n${inputText}`,
-        1600,
-        selectedModel
+        2800,
+        selectedModel,
+        runtimeConfig
       );
       const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim());
       const cleaned = Array.isArray(parsed) ? parsed.filter((item) => typeof item === "string" && item.trim()) : [];
       setVariants(cleaned.slice(0, 3));
       setStatus("");
     } catch (e) {
-      setError(`Failed to generate variants: ${getErrorMessage(e)}`);
+      const message = getErrorMessage(e);
+      if (isMissingApiKeyError(message)) {
+        setApiKeyRequired(true);
+        setApiKeyModalOpen(true);
+      }
+      setError(`Failed to generate variants: ${message}`);
     } finally {
       setLoading(false);
     }
@@ -550,14 +745,20 @@ export default function App() {
       const rewritten = await llm(
         applyPromptDecorators(HUMANIZE_SYS(activeProfile.profile, toneLevel, stripCliches ? cliches : BASE_CLICHES.slice(0, 10))),
         `Rewrite only this sentence while preserving meaning:\n${target}`,
-        400,
-        selectedModel
+        900,
+        selectedModel,
+        runtimeConfig
       );
       sentences[selectedSentenceIndex] = rewritten.trim();
       commitOutput(sentences.join(" "));
       setStatus("");
     } catch (e) {
-      setError(`Failed to rewrite sentence: ${getErrorMessage(e)}`);
+      const message = getErrorMessage(e);
+      if (isMissingApiKeyError(message)) {
+        setApiKeyRequired(true);
+        setApiKeyModalOpen(true);
+      }
+      setError(`Failed to rewrite sentence: ${message}`);
     } finally {
       setLoading(false);
     }
@@ -573,7 +774,7 @@ export default function App() {
     if (inputText.trim().length < 3) { setError("Type some text to check."); return; }
     setError(""); setSpellLoading(true); setSpellResult(null); setExpandedErrorPill(null);
     try {
-      const raw = await llm(SPELLCHECK_SYS(grammarMode), `Check this text:\n\n${inputText}`, 1400, selectedModel);
+      const raw = await llm(SPELLCHECK_SYS(grammarMode), `Check this text:\n\n${inputText}`, 2200, selectedModel, runtimeConfig);
       const parsed = JSON.parse(raw.replace(/```json|```/g,"").trim());
       setSpellResult(parsed);
       if (parsed.errors?.length) {
@@ -586,7 +787,14 @@ export default function App() {
           return updated;
         });
       }
-    } catch (e) { setError("Spell check failed: " + getErrorMessage(e)); }
+    } catch (e) {
+      const message = getErrorMessage(e);
+      if (isMissingApiKeyError(message)) {
+        setApiKeyRequired(true);
+        setApiKeyModalOpen(true);
+      }
+      setError("Spell check failed: " + message);
+    }
     finally { setSpellLoading(false); }
   }
 
@@ -630,7 +838,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [mode, outputText, inputText, styles, activeProfileId, toneLevel, stripCliches, cliches, selectedModel, elabDepth, oneOffInstruction, formatPreset]);
+  }, [mode, outputText, inputText, styles, activeProfileId, toneLevel, stripCliches, cliches, selectedModel, elabDepth, oneOffInstruction, formatPreset, runtimeConfig]);
 
   function goHistory(offset) {
     const nextIndex = historyIndex + offset;
@@ -666,6 +874,10 @@ export default function App() {
         onExportProfile={exportProfile}
         onImportProfile={importProfile}
         onOpenApiKey={() => setApiKeyModalOpen(true)}
+        onResetProfile={resetActiveProfile}
+        settingsOpen={settingsOpen}
+        onToggleSettings={() => setSettingsOpen((value) => !value)}
+        onCloseSettings={() => setSettingsOpen(false)}
       />
 
       <main style={S.main}>
@@ -791,8 +1003,26 @@ export default function App() {
         <ApiKeyModal
           required={apiKeyRequired}
           value={apiKeyInput}
+          apiUrl={apiUrlInput}
+          apiKeyFile={apiKeyFileInput}
           loading={apiKeySaving}
           onChange={setApiKeyInput}
+          onApiUrlChange={(next) => {
+            setApiUrlInput(next);
+            const updated = { ...runtimeConfig, apiUrl: next.trim() };
+            setRuntimeConfig(updated);
+            getApiKeyStatus(updated).then((status) => {
+              setApiKeyRequired(!status.hasKey);
+            }).catch(() => {});
+          }}
+          onApiKeyFileChange={(next) => {
+            setApiKeyFileInput(next);
+            const updated = { ...runtimeConfig, apiKeyFile: next.trim() };
+            setRuntimeConfig(updated);
+            getApiKeyStatus(updated).then((status) => {
+              setApiKeyRequired(!status.hasKey);
+            }).catch(() => {});
+          }}
           onSave={saveApiKey}
           onClear={removeApiKey}
           onClose={() => { if (!apiKeyRequired) setApiKeyModalOpen(false); }}

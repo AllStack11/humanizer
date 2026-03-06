@@ -52,6 +52,23 @@ describe("App utility functions", () => {
     expect(normalized.personal.name).toBe("Personal");
   });
 
+  test("normalizeStoredStyles resolves legacy question sample type labels", () => {
+    const normalized = normalizeStoredStyles({
+      personal: {
+        id: "personal",
+        name: "Personal",
+        profile: { tone: "balanced" },
+        sampleEntries: [
+          { id: 1, text: "How are you feeling about the launch?", type: "Questions / Q&A" },
+          { id: 2, text: "I am excited and a bit nervous.", type: "q&a" },
+        ],
+      },
+    });
+
+    expect(normalized.personal.sampleEntries[0].type).toBe("question");
+    expect(normalized.personal.sampleEntries[1].type).toBe("question");
+  });
+
   test("buildDiffSegments reports insertions and deletions", () => {
     const segments = buildDiffSegments("alpha beta", "alpha gamma beta");
     expect(segments.some((seg) => seg.type === "added" && seg.text.includes("gamma"))).toBe(true);
@@ -147,6 +164,7 @@ describe("App UI", () => {
     fireEvent.change(profileSelect, { target: { value: "work" } });
     await screen.findByText(/Work profile needs onboarding/i);
 
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     const themeSelect = screen.getByRole("combobox", { name: "Theme" });
     fireEvent.change(themeSelect, { target: { value: "teal" } });
     expect(themeSelect).toHaveValue("teal");
@@ -204,6 +222,47 @@ describe("App UI", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Hide Diff" }));
     await screen.findByRole("button", { name: "Show Diff" });
+  });
+
+  test("reopens API key modal when OpenRouter reports missing key", async () => {
+    localStorage.setItem(
+      "styles-v3",
+      JSON.stringify({
+        personal: {
+          id: "personal",
+          name: "Personal",
+          profile: { tone: "balanced" },
+          sampleEntries: [{ id: 1, text: "this is a sample entry with enough content", type: "general" }],
+          sampleCount: 1,
+          updatedAt: new Date().toISOString(),
+        },
+      })
+    );
+
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "has_api_key") return true;
+      if (command === "get_styles_backup") return { styles: {}, savedAt: null };
+      if (command === "save_styles_backup") return { ok: true, savedAt: new Date().toISOString() };
+      if (command === "get_request_logs") return { logs: [] };
+      if (command === "openrouter_chat_stream") {
+        throw new Error("OpenRouter API key not found. Open app settings and save your key.");
+      }
+      if (command === "openrouter_chat") {
+        return { content: [{ text: "ok" }] };
+      }
+      return { ok: true };
+    });
+
+    render(<App />);
+    await screen.findByText(/samples • Personal profile/);
+
+    fireEvent.change(screen.getByPlaceholderText("Paste AI-generated text here…"), {
+      target: { value: "This is a long enough input to trigger the humanize request path." },
+    });
+    const humanizeButtons = screen.getAllByRole("button", { name: "Humanize" });
+    fireEvent.click(humanizeButtons[humanizeButtons.length - 1]);
+
+    await screen.findByText("OpenRouter API Key");
   });
 
   test("grammar mode changes check prompt and keyboard shortcut submits", async () => {

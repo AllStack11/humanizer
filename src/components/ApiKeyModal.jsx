@@ -1,6 +1,18 @@
 import { S } from '../styles/index.js';
 
-export default function ApiKeyModal({ required, value, loading, onChange, onSave, onClear, onClose }) {
+export default function ApiKeyModal({
+  required,
+  value,
+  apiUrl,
+  apiKeyFile,
+  loading,
+  onChange,
+  onApiUrlChange,
+  onApiKeyFileChange,
+  onSave,
+  onClear,
+  onClose,
+}) {
   return (
     <div style={S.modalOverlay} onClick={onClose}>
       <div style={S.modalPanel} onClick={(e) => e.stopPropagation()}>
@@ -11,8 +23,20 @@ export default function ApiKeyModal({ required, value, loading, onChange, onSave
           </button>
         </div>
         <div style={{ marginBottom: 14, color: "#6b5d52", fontSize: 13, lineHeight: 1.6 }}>
-          Save your OpenRouter key to your device keychain. It is required for model requests in desktop mode.
+          Configure endpoint + secret storage. For localhost providers (for example Ollama), API key can be empty.
         </div>
+        <input
+          value={apiUrl}
+          onChange={(e) => onApiUrlChange(e.target.value)}
+          placeholder="API URL (optional): https://openrouter.ai/api/v1/chat/completions"
+          style={{ ...S.textInput, marginBottom: 10 }}
+        />
+        <input
+          value={apiKeyFile}
+          onChange={(e) => onApiKeyFileChange(e.target.value)}
+          placeholder="Key file path (optional): .voice-humanizer/openrouter_api_key"
+          style={{ ...S.textInput, marginBottom: 10 }}
+        />
         <input
           value={value}
           onChange={(e) => onChange(e.target.value)}

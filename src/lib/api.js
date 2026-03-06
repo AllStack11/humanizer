@@ -1,6 +1,16 @@
 import { MODEL_OPTIONS } from '../constants/models.js';
 import { isTauriRuntime, tauriInvoke, tauriListen } from './tauri.js';
 
+function normalizeRuntimeConfig(runtime = {}) {
+  if (!runtime || typeof runtime !== "object") return {};
+  const apiUrl = typeof runtime.apiUrl === "string" ? runtime.apiUrl.trim() : "";
+  const apiKeyFile = typeof runtime.apiKeyFile === "string" ? runtime.apiKeyFile.trim() : "";
+  return {
+    ...(apiUrl ? { api_url: apiUrl } : {}),
+    ...(apiKeyFile ? { api_key_file: apiKeyFile } : {}),
+  };
+}
+
 export function extractStreamTextChunk(payload) {
   const choice = payload?.choices?.[0];
   if (!choice) return "";
@@ -20,16 +30,17 @@ export function extractStreamTextChunk(payload) {
   return "";
 }
 
-export async function llm(system, user, maxTokens = 1400, model = MODEL_OPTIONS[0].value) {
+export async function llm(system, user, maxTokens = 2400, model = MODEL_OPTIONS[0].value, runtime = {}) {
   if (!isTauriRuntime()) throw new Error("Desktop runtime required.");
   const d = await tauriInvoke("openrouter_chat", {
     payload: { max_tokens: maxTokens, model, system, messages: [{ role: "user", content: user }] },
+    runtime: normalizeRuntimeConfig(runtime),
   });
   if (d?.error?.message) throw new Error(d.error.message);
   return d.content[0].text;
 }
 
-export async function llmStream(system, user, onChunk, maxTokens = 1400, model = MODEL_OPTIONS[0].value) {
+export async function llmStream(system, user, onChunk, maxTokens = 2400, model = MODEL_OPTIONS[0].value, runtime = {}) {
   if (!isTauriRuntime()) throw new Error("Desktop runtime required.");
   const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   let fullText = "";
@@ -62,6 +73,7 @@ export async function llmStream(system, user, onChunk, maxTokens = 1400, model =
 
       await tauriInvoke("openrouter_chat_stream", {
         requestId,
+        runtime: normalizeRuntimeConfig(runtime),
         payload: {
           max_tokens: maxTokens,
           model,

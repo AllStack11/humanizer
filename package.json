@@ -11,7 +11,8 @@
     "tauri:build": "node scripts/tauri-runner.mjs build",
     "ci": "npm run test && npm run build:web",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:openrouter": "node scripts/openrouter-integration.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.10.1",

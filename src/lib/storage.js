@@ -1,5 +1,15 @@
 import { isTauriRuntime, tauriInvoke } from './tauri.js';
 
+function normalizeRuntimeConfig(runtime = {}) {
+  if (!runtime || typeof runtime !== "object") return {};
+  const apiUrl = typeof runtime.apiUrl === "string" ? runtime.apiUrl.trim() : "";
+  const apiKeyFile = typeof runtime.apiKeyFile === "string" ? runtime.apiKeyFile.trim() : "";
+  return {
+    ...(apiUrl ? { api_url: apiUrl } : {}),
+    ...(apiKeyFile ? { api_key_file: apiKeyFile } : {}),
+  };
+}
+
 export async function load(key) {
   try { const r = localStorage.getItem(key); return r ? JSON.parse(r) : null; } catch { return null; }
 }
@@ -54,29 +64,29 @@ export async function logDiagnosticEvent(route, request = {}, status = "info", e
   } catch {}
 }
 
-export async function hasStoredApiKey() {
+export async function hasStoredApiKey(runtime) {
   if (!isTauriRuntime()) return true;
-  return tauriInvoke("has_api_key");
+  return tauriInvoke("has_api_key", { runtime: normalizeRuntimeConfig(runtime) });
 }
 
-export async function getApiKeyStatus() {
+export async function getApiKeyStatus(runtime) {
   if (!isTauriRuntime()) return { hasKey: true, source: "web" };
   try {
-    const status = await tauriInvoke("get_api_key_status");
+    const status = await tauriInvoke("get_api_key_status", { runtime: normalizeRuntimeConfig(runtime) });
     if (status && typeof status.hasKey === "boolean" && typeof status.source === "string") {
       return status;
     }
   } catch {}
-  const hasKey = await hasStoredApiKey();
+  const hasKey = await hasStoredApiKey(runtime);
   return { hasKey, source: hasKey ? "unknown" : "missing" };
 }
 
-export async function storeApiKey(key) {
+export async function storeApiKey(key, runtime) {
   if (!isTauriRuntime()) return { ok: true };
-  return tauriInvoke("set_api_key", { key });
+  return tauriInvoke("set_api_key", { key, runtime: normalizeRuntimeConfig(runtime) });
 }
 
-export async function clearStoredApiKey() {
+export async function clearStoredApiKey(runtime) {
   if (!isTauriRuntime()) return { ok: true };
-  return tauriInvoke("clear_api_key");
+  return tauriInvoke("clear_api_key", { runtime: normalizeRuntimeConfig(runtime) });
 }
