@@ -640,15 +640,17 @@ export default function OutputPanel({
               )}
             </div>
             </div>
-            <MetricsPanel
-              readabilityBefore={readabilityBefore}
-              readabilityAfter={readabilityAfter}
-              metricSnapshotBefore={metricSnapshotBefore}
-              metricSnapshotAfter={metricSnapshotAfter}
-              delta={delta}
-              isEdited={isEdited}
-            />
           </div>
+        </div>
+        <div className={`output-metrics-detached${compareOpen ? " output-metrics-detached--compare" : ""}`}>
+          <MetricsPanel
+            readabilityBefore={readabilityBefore}
+            readabilityAfter={readabilityAfter}
+            metricSnapshotBefore={metricSnapshotBefore}
+            metricSnapshotAfter={metricSnapshotAfter}
+            delta={delta}
+            isEdited={isEdited}
+          />
         </div>
 
         {!isStreaming ? (

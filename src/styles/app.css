@@ -1584,6 +1584,17 @@ button {
   gap: 12px;
 }
 
+.output-metrics-detached {
+  width: min(80%, 900px);
+  min-width: 280px;
+  margin: 0 auto;
+  transition: width 220ms ease;
+}
+
+.output-metrics-detached--compare {
+  width: min(96%, 1240px);
+}
+
 .output-source-card {
   display: grid;
   gap: 4px;
@@ -2061,6 +2072,12 @@ button {
 
 @media (max-width: 900px) {
   .output-stream-box-wrap {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .output-metrics-detached,
+  .output-metrics-detached--compare {
     width: 100%;
     min-width: 0;
   }
