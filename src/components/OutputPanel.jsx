@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Tooltip } from "@mantine/core";
 import { Extension } from "@tiptap/core";
 import { useEditor, EditorContent } from "@tiptap/react";
@@ -384,6 +384,55 @@ export default function OutputPanel({
   const [feedbackText, setFeedbackText] = useState("");
   const [userInputOpen, setUserInputOpen] = useState(false);
   const [compareOpen, setCompareOpen] = useState(false);
+  const streamStartMsRef = useRef(0);
+  const streamPrevLengthRef = useRef(0);
+  const [streamPulse, setStreamPulse] = useState(false);
+  const [streamStats, setStreamStats] = useState({
+    chars: 0,
+    chunks: 0,
+    charsPerSecond: 0,
+  });
+
+  useEffect(() => {
+    if (!isStreaming) {
+      streamStartMsRef.current = 0;
+      streamPrevLengthRef.current = 0;
+      setStreamPulse(false);
+      setStreamStats({
+        chars: 0,
+        chunks: 0,
+        charsPerSecond: 0,
+      });
+      return;
+    }
+    if (!streamStartMsRef.current) streamStartMsRef.current = Date.now();
+    if (outputText.length === 0) {
+      streamPrevLengthRef.current = 0;
+      setStreamStats((prev) => ({ ...prev, chars: 0, charsPerSecond: 0 }));
+    }
+  }, [isStreaming, outputText.length]);
+
+  useEffect(() => {
+    if (!isStreaming) return;
+    const previousLength = streamPrevLengthRef.current;
+    const nextLength = outputText.length;
+    if (nextLength <= previousLength) return;
+
+    streamPrevLengthRef.current = nextLength;
+    const elapsedSeconds = Math.max((Date.now() - streamStartMsRef.current) / 1000, 0.001);
+    setStreamPulse(true);
+    setStreamStats((prev) => ({
+      chars: nextLength,
+      chunks: prev.chunks + 1,
+      charsPerSecond: Math.max(1, Math.round(nextLength / elapsedSeconds)),
+    }));
+  }, [isStreaming, outputText]);
+
+  useEffect(() => {
+    if (!streamPulse) return;
+    const timeoutId = window.setTimeout(() => setStreamPulse(false), 240);
+    return () => window.clearTimeout(timeoutId);
+  }, [streamPulse]);
 
   function submitRegenerateWithFeedback() {
     const feedback = feedbackText.trim();
@@ -435,10 +484,18 @@ export default function OutputPanel({
               </p>
             ) : null}
           </div>
-          <div className="output-stream-box-shell">
-            <div className="output-stream-box-tools">
-              <span className="text-mono output-role-label">LLM output</span>
-              <div className="output-stream-actions">
+          <div className="output-llm-column">
+            <div className="output-stream-box-shell">
+              <div className="output-stream-box-tools">
+                <div className="output-stream-labels">
+                  <span className="text-mono output-role-label">LLM output</span>
+                  {isStreaming ? (
+                    <span className="text-mono output-stream-stats" aria-live="polite">
+                      {streamStats.chunks} chunks · {streamStats.charsPerSecond} cps
+                    </span>
+                  ) : null}
+                </div>
+                <div className="output-stream-actions">
                 <div className="output-feedback-trigger">
                   <div className={`output-feedback-slideout${feedbackOpen ? " is-open" : ""}`}>
                     <textarea
@@ -564,16 +621,24 @@ export default function OutputPanel({
                     </svg>
                   )}
                 </Button>
+                </div>
               </div>
-            </div>
-            <div className="output-stream-box output-markdown-view" aria-label="Streaming LLM response" role="region">
+            <div
+              className={`output-stream-box output-markdown-view${isStreaming ? " is-streaming" : ""}${streamPulse ? " output-stream-box--pulse" : ""}`}
+              aria-label="Streaming LLM response"
+              role="region"
+            >
               {outputText?.trim() ? (
-                <div className="output-markdown-content" dangerouslySetInnerHTML={{ __html: markdownHtml }} />
+                <>
+                  <div className="output-markdown-content" dangerouslySetInnerHTML={{ __html: markdownHtml }} />
+                  {isStreaming ? <span className="output-stream-caret" aria-hidden="true" /> : null}
+                </>
               ) : (
                 <p className="output-markdown-placeholder">
                   {isStreaming ? "Waiting for model output..." : "Generated response"}
                 </p>
               )}
+            </div>
             </div>
             <MetricsPanel
               readabilityBefore={readabilityBefore}

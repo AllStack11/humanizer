@@ -1,6 +1,14 @@
 import { MODEL_OPTIONS } from '../constants/models.js';
 import { isTauriRuntime, tauriInvoke, tauriListen } from './tauri.js';
 
+const DEFAULT_STREAM_CHARS_PER_SECOND = import.meta.env?.MODE === "test" ? 420 : 380;
+
+const DEFAULT_STREAM_PACING = {
+  enabled: true,
+  tickMs: 20,
+  charsPerSecond: DEFAULT_STREAM_CHARS_PER_SECOND,
+};
+
 function normalizeRuntimeConfig(runtime = {}) {
   if (!runtime || typeof runtime !== "object") return {};
   const apiUrl = typeof runtime.apiUrl === "string" ? runtime.apiUrl.trim() : "";
@@ -8,6 +16,107 @@ function normalizeRuntimeConfig(runtime = {}) {
   return {
     ...(apiUrl ? { api_url: apiUrl } : {}),
     ...(apiKeyFile ? { api_key_file: apiKeyFile } : {}),
+  };
+}
+
+function normalizeStreamPacingConfig(rawConfig = {}) {
+  if (rawConfig === false) return { ...DEFAULT_STREAM_PACING, enabled: false };
+  if (rawConfig === true) return { ...DEFAULT_STREAM_PACING, enabled: true };
+  if (!rawConfig || typeof rawConfig !== "object") return { ...DEFAULT_STREAM_PACING };
+
+  const enabled = typeof rawConfig.enabled === "boolean" ? rawConfig.enabled : DEFAULT_STREAM_PACING.enabled;
+  const tickMsValue = Number(rawConfig.tickMs);
+  const charsPerSecondValue = Number(rawConfig.charsPerSecond);
+
+  return {
+    enabled,
+    tickMs: Number.isFinite(tickMsValue) ? Math.min(120, Math.max(10, Math.round(tickMsValue))) : DEFAULT_STREAM_PACING.tickMs,
+    charsPerSecond: Number.isFinite(charsPerSecondValue)
+      ? Math.min(2200, Math.max(40, Math.round(charsPerSecondValue)))
+      : DEFAULT_STREAM_PACING.charsPerSecond,
+  };
+}
+
+export function createPacedStreamEmitter(onChunk, pacingConfig = {}) {
+  const config = normalizeStreamPacingConfig(pacingConfig);
+  const emitChunk = typeof onChunk === "function" ? onChunk : () => {};
+
+  let intervalId = null;
+  let queued = "";
+  let displayedText = "";
+  const pendingFlushResolvers = [];
+
+  const baseCharsPerTick = Math.max(1, Math.round((config.charsPerSecond * config.tickMs) / 1000));
+
+  const resolvePendingFlushes = () => {
+    if (queued.length || intervalId) return;
+    while (pendingFlushResolvers.length) {
+      const resolve = pendingFlushResolvers.shift();
+      resolve(displayedText);
+    }
+  };
+
+  const stopTimer = () => {
+    if (intervalId == null) return;
+    window.clearInterval(intervalId);
+    intervalId = null;
+  };
+
+  const streamTick = () => {
+    if (!queued.length) {
+      stopTimer();
+      resolvePendingFlushes();
+      return;
+    }
+
+    const backlogBoost = Math.floor(queued.length / 260);
+    const emitLength = Math.max(1, baseCharsPerTick + backlogBoost);
+    const chunk = queued.slice(0, emitLength);
+    queued = queued.slice(emitLength);
+    displayedText += chunk;
+    emitChunk(chunk, displayedText);
+
+    if (!queued.length) {
+      stopTimer();
+      resolvePendingFlushes();
+    }
+  };
+
+  const startTimer = () => {
+    if (intervalId != null) return;
+    intervalId = window.setInterval(streamTick, config.tickMs);
+  };
+
+  const push = (incomingChunk, authoritativeFullText = null) => {
+    const chunk = String(incomingChunk || "");
+    if (!chunk) return;
+
+    if (!config.enabled) {
+      displayedText = typeof authoritativeFullText === "string" ? authoritativeFullText : (displayedText + chunk);
+      emitChunk(chunk, displayedText);
+      return;
+    }
+
+    queued += chunk;
+    startTimer();
+  };
+
+  const flush = async () => {
+    if (!config.enabled) return displayedText;
+    if (!queued.length && intervalId == null) return displayedText;
+    return new Promise((resolve) => pendingFlushResolvers.push(resolve));
+  };
+
+  const stop = () => {
+    stopTimer();
+    queued = "";
+    resolvePendingFlushes();
+  };
+
+  return {
+    push,
+    flush,
+    stop,
   };
 }
 
@@ -45,6 +154,7 @@ export async function llmStream(system, user, onChunk, maxTokens = 2400, model =
   const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   let fullText = "";
   let streamError = null;
+  const pacedEmitter = createPacedStreamEmitter(onChunk, runtime?.streamPacing);
 
   return new Promise(async (resolve, reject) => {
     let finished = false;
@@ -54,6 +164,7 @@ export async function llmStream(system, user, onChunk, maxTokens = 2400, model =
       if (finished) return;
       finished = true;
       if (typeof unlisten === "function") unlisten();
+      pacedEmitter.stop();
       fn(value);
     };
 
@@ -67,7 +178,7 @@ export async function llmStream(system, user, onChunk, maxTokens = 2400, model =
         }
         if (typeof payload.chunk === "string" && payload.chunk.length) {
           fullText = typeof payload.fullText === "string" ? payload.fullText : (fullText + payload.chunk);
-          onChunk(payload.chunk, fullText);
+          pacedEmitter.push(payload.chunk, fullText);
         }
       });
 
@@ -83,6 +194,7 @@ export async function llmStream(system, user, onChunk, maxTokens = 2400, model =
         },
       });
 
+      await pacedEmitter.flush();
       if (streamError) {
         settle(reject, new Error(streamError));
         return;

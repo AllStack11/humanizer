@@ -140,6 +140,7 @@ export default function App() {
   const [activeHistoryEntryId, setActiveHistoryEntryId] = useState(null);
   const [selectedHistoryPreviewEntryId, setSelectedHistoryPreviewEntryId] = useState(null);
   const [selectedGlobalHistoryEntryId, setSelectedGlobalHistoryEntryId] = useState(null);
+  const inputTextRef = useRef(inputText);
 
   // Modals / dropdowns
   const [styleModalOpen, setStyleModalOpen]   = useState(false);
@@ -198,6 +199,24 @@ export default function App() {
       saveOutputHistory(next);
       return next;
     });
+  }
+
+  function readComposerTextFromDom() {
+    if (typeof document === "undefined") return "";
+    const textarea = document.querySelector("textarea.editor-textarea");
+    if (textarea && typeof textarea.value === "string") return textarea.value;
+    const tiptap = document.querySelector(".tiptap-editor");
+    return tiptap?.textContent || "";
+  }
+
+  function resolveSourceText() {
+    const stateText = String(inputTextRef.current || "");
+    try {
+      const domText = String(readComposerTextFromDom() || "");
+      return domText.trim().length > stateText.trim().length ? domText : stateText;
+    } catch {
+      return stateText;
+    }
   }
 
   function copyTextToClipboard(text, successMessage = "Copied.") {
@@ -1031,9 +1050,10 @@ export default function App() {
 
   // ── Humanize ──
   async function humanize({ regenerateFeedback = "" } = {}) {
+    const sourceText = resolveSourceText();
     const activeProfile = styles[activeProfileId];
     if (!activeProfile) { setError("Onboard your writing profile first."); return; }
-    if (inputText.trim().length < 20) { setError("Paste some text to humanize (20+ chars)."); return; }
+    if (sourceText.trim().length < 20) { setError("Paste some text to humanize (20+ chars)."); return; }
     setError(""); setLoading(true); setRequestLoading(true); setStatus("Rewriting in your voice…");
     startProcessLog("Starting rewrite request.", `Mode: humanize via ${selectedModel}`);
     try {
@@ -1069,14 +1089,14 @@ export default function App() {
       pushProcessStep("Preparing prompt and opening model stream.");
       let out = await streamRewrite(
         baseSystemPrompt,
-        buildHumanizeUserPrompt(inputText),
+        buildHumanizeUserPrompt(sourceText),
         "Model stream connected. Receiving rewrite output."
       );
-      if (outputLooksLikeAnsweredPrompt(inputText, out)) {
+      if (outputLooksLikeAnsweredPrompt(sourceText, out)) {
         pushProcessStep("Draft looked like a reply instead of a rewrite. Retrying with stricter guardrails.", "info");
         out = await streamRewrite(
           `${baseSystemPrompt}\n\nCritical constraint:\n- Rewrite the source text itself and never answer it as though you are in a live conversation.`,
-          buildHumanizeUserPrompt(inputText, { strict: true }),
+          buildHumanizeUserPrompt(sourceText, { strict: true }),
           "Retry stream connected. Receiving guarded rewrite output."
         );
       }
@@ -1111,9 +1131,10 @@ export default function App() {
 
   // ── Elaborate ──
   async function elaborate({ regenerateFeedback = "" } = {}) {
+    const sourceText = resolveSourceText();
     const activeProfile = styles[activeProfileId];
     if (!activeProfile) { setError("Onboard your writing profile first."); return; }
-    if (inputText.trim().length < 10) { setError("Write something to elaborate on."); return; }
+    if (sourceText.trim().length < 10) { setError("Write something to elaborate on."); return; }
     setError(""); setLoading(true); setRequestLoading(true); setStatus("Expanding your writing…");
     startProcessLog("Starting expansion request.", `Mode: elaborate via ${selectedModel}`);
     try {
@@ -1128,7 +1149,7 @@ export default function App() {
         : "";
       const out = await llmStream(
         [basePrompt, feedbackPrompt].filter(Boolean).join("\n\n"),
-        `Elaborate on:\n\n${inputText}`,
+        `Elaborate on:\n\n${sourceText}`,
         (_, full) => {
           if (!loggedFirstChunk) {
             loggedFirstChunk = true;
@@ -1213,6 +1234,7 @@ export default function App() {
   const words = countWords(inputText);
 
   const handleInputChange = (val) => {
+    inputTextRef.current = val;
     setInputText(val);
     clearOutputState();
   };
@@ -1226,8 +1248,11 @@ export default function App() {
     const onKeyDown = (event) => {
       if (event.metaKey && event.key === "Enter") {
         event.preventDefault();
-        if (mode === "humanize") humanize();
-        else elaborate();
+        // Let pending editor state updates settle before reading inputText.
+        window.setTimeout(() => {
+          if (mode === "humanize") humanize();
+          else elaborate();
+        }, 0);
       }
     };
     window.addEventListener("keydown", onKeyDown);

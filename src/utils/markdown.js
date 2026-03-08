@@ -7,6 +7,15 @@ function escapeHtml(text) {
     .replaceAll("'", "&#39;");
 }
 
+function renderPlainTextAsHtml(text) {
+  const normalized = String(text || "").replace(/\r\n/g, "\n");
+  if (!normalized.trim()) return "";
+  return normalized
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, "<br>")}</p>`)
+    .join("");
+}
+
 function normalizeUrl(url) {
   const trimmed = String(url || "").trim();
   if (!trimmed) return "";
@@ -61,123 +70,133 @@ function wrapList(items, ordered) {
 }
 
 export function renderMarkdownToHtml(text) {
-  const source = String(text || "");
+  let source = "";
+  try {
+    source = String(text || "");
+  } catch {
+    return "";
+  }
+
   if (!source.trim()) return "";
 
-  const lines = source.replace(/\r\n/g, "\n").split("\n");
-  const htmlParts = [];
+  try {
+    const lines = source.replace(/\r\n/g, "\n").split("\n");
+    const htmlParts = [];
 
-  let paragraphLines = [];
-  let listItems = [];
-  let listOrdered = false;
-  let inCodeFence = false;
-  let codeFenceLang = "";
-  let codeFenceLines = [];
+    let paragraphLines = [];
+    let listItems = [];
+    let listOrdered = false;
+    let inCodeFence = false;
+    let codeFenceLang = "";
+    let codeFenceLines = [];
 
-  const flushParagraph = () => {
-    const html = wrapParagraph(paragraphLines);
-    if (html) htmlParts.push(html);
-    paragraphLines = [];
-  };
+    const flushParagraph = () => {
+      const html = wrapParagraph(paragraphLines);
+      if (html) htmlParts.push(html);
+      paragraphLines = [];
+    };
 
-  const flushList = () => {
-    const html = wrapList(listItems, listOrdered);
-    if (html) htmlParts.push(html);
-    listItems = [];
-  };
+    const flushList = () => {
+      const html = wrapList(listItems, listOrdered);
+      if (html) htmlParts.push(html);
+      listItems = [];
+    };
 
-  const flushCodeFence = () => {
-    const code = escapeHtml(codeFenceLines.join("\n"));
-    const languageClass = codeFenceLang ? ` class="language-${escapeHtml(codeFenceLang)}"` : "";
-    htmlParts.push(`<pre><code${languageClass}>${code}</code></pre>`);
-    codeFenceLines = [];
-    codeFenceLang = "";
-  };
+    const flushCodeFence = () => {
+      const code = escapeHtml(codeFenceLines.join("\n"));
+      const languageClass = codeFenceLang ? ` class="language-${escapeHtml(codeFenceLang)}"` : "";
+      htmlParts.push(`<pre><code${languageClass}>${code}</code></pre>`);
+      codeFenceLines = [];
+      codeFenceLang = "";
+    };
 
-  for (const line of lines) {
-    const trimmed = line.trim();
+    for (const line of lines) {
+      const trimmed = line.trim();
 
-    const fenceMatch = line.match(/^```\s*([a-zA-Z0-9_-]+)?\s*$/);
-    if (fenceMatch) {
-      flushParagraph();
-      flushList();
+      const fenceMatch = line.match(/^```\s*([a-zA-Z0-9_-]+)?\s*$/);
+      if (fenceMatch) {
+        flushParagraph();
+        flushList();
 
-      if (inCodeFence) {
-        flushCodeFence();
-      } else {
-        codeFenceLang = fenceMatch[1] || "";
+        if (inCodeFence) {
+          flushCodeFence();
+        } else {
+          codeFenceLang = fenceMatch[1] || "";
+        }
+
+        inCodeFence = !inCodeFence;
+        continue;
       }
 
-      inCodeFence = !inCodeFence;
-      continue;
+      if (inCodeFence) {
+        codeFenceLines.push(line);
+        continue;
+      }
+
+      if (!trimmed) {
+        flushParagraph();
+        flushList();
+        continue;
+      }
+
+      const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+      if (headingMatch) {
+        flushParagraph();
+        flushList();
+        const level = headingMatch[1].length;
+        htmlParts.push(`<h${level}>${renderInlineMarkdown(headingMatch[2].trim())}</h${level}>`);
+        continue;
+      }
+
+      const blockquoteMatch = line.match(/^>\s?(.*)$/);
+      if (blockquoteMatch) {
+        flushParagraph();
+        flushList();
+        htmlParts.push(`<blockquote><p>${renderInlineMarkdown(blockquoteMatch[1])}</p></blockquote>`);
+        continue;
+      }
+
+      const orderedListMatch = line.match(/^\d+\.\s+(.+)$/);
+      if (orderedListMatch) {
+        flushParagraph();
+        if (!listItems.length) {
+          listOrdered = true;
+        } else if (!listOrdered) {
+          flushList();
+          listOrdered = true;
+        }
+        listItems.push(orderedListMatch[1]);
+        continue;
+      }
+
+      const unorderedListMatch = line.match(/^[-*+]\s+(.+)$/);
+      if (unorderedListMatch) {
+        flushParagraph();
+        if (!listItems.length) {
+          listOrdered = false;
+        } else if (listOrdered) {
+          flushList();
+          listOrdered = false;
+        }
+        listItems.push(unorderedListMatch[1]);
+        continue;
+      }
+
+      flushList();
+      paragraphLines.push(line);
     }
 
     if (inCodeFence) {
-      codeFenceLines.push(line);
-      continue;
-    }
-
-    if (!trimmed) {
       flushParagraph();
       flushList();
-      continue;
-    }
-
-    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
-    if (headingMatch) {
+      flushCodeFence();
+    } else {
       flushParagraph();
       flushList();
-      const level = headingMatch[1].length;
-      htmlParts.push(`<h${level}>${renderInlineMarkdown(headingMatch[2].trim())}</h${level}>`);
-      continue;
     }
 
-    const blockquoteMatch = line.match(/^>\s?(.*)$/);
-    if (blockquoteMatch) {
-      flushParagraph();
-      flushList();
-      htmlParts.push(`<blockquote><p>${renderInlineMarkdown(blockquoteMatch[1])}</p></blockquote>`);
-      continue;
-    }
-
-    const orderedListMatch = line.match(/^\d+\.\s+(.+)$/);
-    if (orderedListMatch) {
-      flushParagraph();
-      if (!listItems.length) {
-        listOrdered = true;
-      } else if (!listOrdered) {
-        flushList();
-        listOrdered = true;
-      }
-      listItems.push(orderedListMatch[1]);
-      continue;
-    }
-
-    const unorderedListMatch = line.match(/^[-*+]\s+(.+)$/);
-    if (unorderedListMatch) {
-      flushParagraph();
-      if (!listItems.length) {
-        listOrdered = false;
-      } else if (listOrdered) {
-        flushList();
-        listOrdered = false;
-      }
-      listItems.push(unorderedListMatch[1]);
-      continue;
-    }
-
-    flushList();
-    paragraphLines.push(line);
+    return htmlParts.join("");
+  } catch {
+    return renderPlainTextAsHtml(source);
   }
-
-  if (inCodeFence) {
-    flushParagraph();
-    flushList();
-    flushCodeFence();
-  } else {
-    flushParagraph();
-    flushList();
-  }
-
-  return htmlParts.join("");
 }

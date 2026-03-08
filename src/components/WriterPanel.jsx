@@ -3,13 +3,13 @@ import { NativeSelect, Tooltip } from "@mantine/core";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
-import { defaultMarkdownSerializer } from "@tiptap/pm/markdown";
 import { Button, Card } from "./AppUI.jsx";
 import ToggleSwitch from "./ToggleSwitch.jsx";
 import { DynamicHighlighter } from "../lib/tiptap-highlighter.js";
 import { ELAB_DEPTHS, OUTPUT_PRESET_OPTIONS, TONE_LEVELS } from "../constants/index.js";
 import { buildClicheRanges } from "../utils/index.js";
 import { renderMarkdownToHtml } from "../utils/markdown.js";
+import { serializeTiptapEditorToMarkdown } from "../utils/tiptapMarkdown.js";
 
 const ADD_CUSTOM_MODEL_VALUE = "__add_custom_model__";
 const IS_TEST_ENV =
@@ -21,7 +21,7 @@ function normalizeMarkdown(text) {
 }
 
 function serializeEditorMarkdown(editor) {
-  return defaultMarkdownSerializer.serialize(editor.state.doc).replace(/\r\n/g, "\n").replace(/\n+$/, "");
+  return serializeTiptapEditorToMarkdown(editor);
 }
 
 function TiptapInput({
@@ -71,7 +71,7 @@ function TiptapInput({
         if (event.key !== "Enter" || event.shiftKey) return false;
         if (!canSubmitRef.current) return false;
         event.preventDefault();
-        onSubmitRef.current?.();
+        window.setTimeout(() => onSubmitRef.current?.(), 0);
         return true;
       },
       attributes: {
@@ -95,7 +95,11 @@ function TiptapInput({
     const editorMarkdown = serializeEditorMarkdown(editor);
     if (normalizeMarkdown(editorMarkdown) !== normalizeMarkdown(inputText)) {
       const { from, to } = editor.state.selection;
-      editor.commands.setContent(renderMarkdownToHtml(inputText), false);
+      try {
+        editor.commands.setContent(renderMarkdownToHtml(inputText), false);
+      } catch {
+        editor.commands.setContent("", false);
+      }
       try {
         editor.commands.setTextSelection({
           from: Math.min(from, editor.state.doc.content.size),
@@ -184,9 +188,15 @@ export default function WriterPanel({
   const instructionInputRef = useRef(null);
   const previousInstructionRef = useRef(oneOffInstruction);
   const minChars = mode === "humanize" ? 20 : 10;
+  const inputLength = inputText.trim().length;
+  const meetsMinimum = inputLength >= minChars;
   const busy = loading;
-  const canAttemptSubmit = !busy && inputText.trim().length >= minChars;
+  const canAttemptSubmit = !busy && meetsMinimum;
   const [instructionOpen, setInstructionOpen] = useState(Boolean(oneOffInstruction?.trim()));
+
+  function submitSoon() {
+    window.setTimeout(() => onSubmit?.(), 0);
+  }
 
   async function pasteFromClipboard() {
     try {
@@ -341,7 +351,7 @@ export default function WriterPanel({
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey && canAttemptSubmit) {
                     event.preventDefault();
-                    onSubmit();
+                    submitSoon();
                   }
                 }}
                 autoFocus
@@ -432,7 +442,7 @@ export default function WriterPanel({
                     />
                     <Button
                       color="primary"
-                      onPress={onSubmit}
+                      onPress={submitSoon}
                       isDisabled={!canAttemptSubmit}
                       aria-label={
                         loading
@@ -444,9 +454,15 @@ export default function WriterPanel({
                       tooltip={
                         loading
                           ? mode === "humanize" ? "Rewriting your draft" : "Expanding your draft"
+                          : inputLength === 0
+                            ? "Enter some text before sending"
                           : !hasStyle
                             ? "Press send after onboarding a profile"
-                            : hasStyle
+                            : !meetsMinimum
+                              ? mode === "humanize"
+                                ? "Paste some text to humanize (20+ chars)"
+                                : "Write something to elaborate on (10+ chars)"
+                          : hasStyle
                               ? mode === "humanize"
                                 ? "Send the draft to rewrite in your voice"
                                 : "Expand the draft with more detail"

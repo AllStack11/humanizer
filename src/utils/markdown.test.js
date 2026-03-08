@@ -17,4 +17,15 @@ describe("renderMarkdownToHtml", () => {
     expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
     expect(html).toContain("<pre><code class=\"language-js\">const x = &quot;&lt;tag&gt;&quot;;</code></pre>");
   });
+
+  test("falls back safely when input coercion fails", () => {
+    const badInput = {
+      toString() {
+        throw new Error("boom");
+      },
+    };
+
+    expect(() => renderMarkdownToHtml(badInput)).not.toThrow();
+    expect(renderMarkdownToHtml(badInput)).toBe("");
+  });
 });

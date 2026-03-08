@@ -1666,11 +1666,23 @@ button {
   transition: border-radius 220ms ease, box-shadow 220ms ease, background 220ms ease;
 }
 
+.output-llm-column {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.output-stream-box-wrap--compare .output-llm-column {
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
 .output-stream-box-wrap--compare .output-stream-box-shell {
   height: 100%;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .output-stream-box-tools {
@@ -1687,6 +1699,18 @@ button {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: color-mix(in srgb, var(--accent) 52%, var(--app-text) 48%);
+}
+
+.output-stream-labels {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.output-stream-stats {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--app-muted) 84%, var(--accent) 16%);
 }
 
 .output-stream-actions {
@@ -1732,6 +1756,7 @@ button {
 
 .output-stream-box {
   display: block;
+  position: relative;
   width: 100%;
   min-width: 0;
   min-height: 148px;
@@ -1748,6 +1773,50 @@ button {
   font-size: 15px;
   line-height: 1.6;
   transition: padding 220ms ease;
+}
+
+.output-stream-box.is-streaming {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent-soft) 14%, transparent) 0%,
+    transparent 34%
+  );
+}
+
+.output-stream-box.output-stream-box--pulse {
+  animation: outputStreamPulse 240ms ease-out;
+}
+
+.output-stream-caret {
+  display: inline-block;
+  width: 7px;
+  height: 1.15em;
+  margin-left: 2px;
+  border-radius: 2px;
+  vertical-align: text-bottom;
+  background: color-mix(in srgb, var(--accent) 76%, white 24%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 48%, transparent);
+  animation: outputStreamCaretBlink 900ms steps(2, jump-none) infinite;
+}
+
+@keyframes outputStreamPulse {
+  0% {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 44%, transparent);
+  }
+  100% {
+    box-shadow: inset 0 0 0 1px transparent;
+  }
+}
+
+@keyframes outputStreamCaretBlink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0.2;
+  }
 }
 
 .output-stream-box-wrap--compare .output-stream-box {

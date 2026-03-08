@@ -245,7 +245,7 @@ describe("App UI", () => {
       target: { value: "make this sound more confident" },
     });
 
-    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    fireEvent.click(screen.getByRole("button", { name: "Humanize text" }));
 
     await waitFor(() => {
       const streamCall = invokeMock.mock.calls.find(([command]) => command === "openrouter_chat_stream");
@@ -289,7 +289,7 @@ describe("App UI", () => {
       target: { value: "add a concrete example at the end" },
     });
 
-    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    fireEvent.click(screen.getByRole("button", { name: "Elaborate text" }));
 
     await waitFor(() => {
       const streamCall = invokeMock.mock.calls.find(([command]) => command === "openrouter_chat_stream");
@@ -1562,7 +1562,7 @@ describe("App UI", () => {
     expect(invokeMock.mock.calls.some(([command]) => command === "openrouter_chat_stream")).toBe(false);
   });
 
-  test("blocks Enter submit when input is below minimum length", async () => {
+  test("prevents model request when input is below minimum length", async () => {
     localStorage.setItem(
       "styles-v3",
       JSON.stringify({
