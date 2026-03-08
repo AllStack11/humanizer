@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 
 // Constants
 import {
@@ -16,33 +16,143 @@ import {
   load, save, loadStylesBackup, saveStylesBackupRaw,
   loadRequestLogs, clearRequestLogs,
   getApiKeyStatus, storeApiKey, clearStoredApiKey,
-  logDiagnosticEvent,
+  logDiagnosticEvent, resetAppData,
 } from './lib/storage.js';
-import { STYLE_ANALYZE_SYS, STYLE_MERGE_SYS, HUMANIZE_SYS, ELABORATE_SYS, SPELLCHECK_SYS } from './lib/prompts.js';
+import {
+  appendHistoryEntry,
+  buildSessionThreadKey,
+  createEmptyOutputHistory,
+  getOrCreateActiveSession,
+  listSessionEntries,
+  loadOutputHistory,
+  pruneUnsavedEntries,
+  saveOutputHistory,
+  searchHistoryEntries,
+  toggleSavedHistoryEntry,
+  updateHistoryEntry,
+  deleteHistoryEntry,
+  deleteHistoryEntriesForProfile,
+} from './lib/output-history.js';
+import { STYLE_ANALYZE_SYS, STYLE_MERGE_SYS, HUMANIZE_SYS, ELABORATE_SYS } from './lib/prompts.js';
 
 // Utils
 import {
-  countWords, splitSentences, computeReadabilityScore, computeWordCharDelta,
+  countWords,
+  computeTextMetricSnapshot,
+  computeWordCharDelta,
   buildClicheRanges,
   normalizeSampleSlot, normalizeStoredStyles, getFilledSlots, formatSampleForPrompt,
   collectCoverageGaps, computeProfileHealth, hasTrainedProfile,
   getFormatPresetInstruction, formatRelativeTime,
 } from './utils/index.js';
 
-// Styles
-import { S } from './styles/index.js';
-
 // Components
-import GlobalStyles from './components/GlobalStyles.jsx';
 import Topbar from './components/Topbar.jsx';
-import ControlsBar from './components/ControlsBar.jsx';
 import WriterPanel from './components/WriterPanel.jsx';
 import OutputPanel from './components/OutputPanel.jsx';
-import SpellResultsBar from './components/SpellResultsBar.jsx';
 import DiagnosticsPanel from './components/DiagnosticsPanel.jsx';
 import StyleModal from './components/StyleModal.jsx';
 import ApiKeyModal from './components/ApiKeyModal.jsx';
-import LoadingOverlay from './components/LoadingOverlay.jsx';
+import ManagementPanel from './components/ManagementPanel.jsx';
+import ProcessLogPanel from './components/ProcessLogPanel.jsx';
+import OutputHistoryDrawer from './components/OutputHistoryDrawer.jsx';
+import { Drawer } from "@mantine/core";
+import { Button } from "./components/AppUI.jsx";
+
+const CONVERSATIONAL_OPENERS = [
+  "hi",
+  "hey",
+  "hello",
+  "yo",
+  "good morning",
+  "good afternoon",
+  "good evening",
+  "how are you",
+  "how's it going",
+  "hows it going",
+  "what's up",
+  "whats up",
+  "can you",
+  "could you",
+  "would you",
+  "will you",
+  "do you",
+  "did you",
+  "are you",
+  "have you",
+  "where are",
+  "when are",
+  "why are",
+  "what are",
+];
+
+function normalizeHumanizeText(text) {
+  return String(text || "").trim().replace(/\s+/g, " ");
+}
+
+export function analyzeHumanizeInput(text) {
+  const normalized = normalizeHumanizeText(text);
+  const lower = normalized.toLowerCase();
+  const wordCount = countWords(normalized);
+  const greetingLike = /^(hi|hey|hello|yo|good morning|good afternoon|good evening)\b/i.test(normalized);
+  const questionLike = /\?\s*$/.test(normalized)
+    || CONVERSATIONAL_OPENERS.some((prefix) => lower.startsWith(prefix))
+    || /\bhow are you\b/i.test(normalized);
+  const shortChatLike = wordCount > 0 && wordCount <= 14;
+  const conversational = shortChatLike && (greetingLike || questionLike || /\byou\b/i.test(normalized));
+
+  return {
+    normalized,
+    wordCount,
+    greetingLike,
+    questionLike,
+    shortChatLike,
+    conversational,
+  };
+}
+
+export function buildHumanizeUserPrompt(text, { strict = false } = {}) {
+  const analysis = analyzeHumanizeInput(text);
+  const guardrails = [
+    "Rewrite the source text below in the target voice.",
+    "Transform the source text itself. Do not answer it, continue it, or switch to the other speaker.",
+  ];
+
+  if (analysis.questionLike) {
+    guardrails.push("Keep the result as a question or check-in rather than turning it into an answer.");
+  }
+  if (analysis.greetingLike) {
+    guardrails.push("Keep the greeting intent. Do not reply to the greeting.");
+  }
+  if (analysis.shortChatLike) {
+    guardrails.push("Stay close to the original scope and length unless a tiny expansion is needed for natural phrasing.");
+  }
+  if (strict) {
+    guardrails.push("Your previous attempt drifted into a response. Rewrite the source itself this time.");
+  }
+
+  return `${guardrails.join("\n")}\n\n<source_text>\n${String(text || "").trim()}\n</source_text>`;
+}
+
+export function outputLooksLikeAnsweredPrompt(sourceText, outputText) {
+  const source = analyzeHumanizeInput(sourceText);
+  if (!source.conversational) return false;
+
+  const output = normalizeHumanizeText(outputText);
+  if (!output) return false;
+
+  const outputWordCount = countWords(output);
+  let suspicion = 0;
+
+  if (source.questionLike && !/\?\s*$/.test(output)) suspicion += 1;
+  if (outputWordCount >= Math.max(source.wordCount * 3, source.wordCount + 12)) suspicion += 1;
+  if (/\b(i am|i'm|im|i’ve|i've|i feel|i was|i've been|i have been)\b/i.test(output)) suspicion += 1;
+  if (/\bdoing (pretty )?(good|well|great|okay|ok|fine)\b/i.test(output)) suspicion += 1;
+  if (/\bthanks for asking\b/i.test(output)) suspicion += 1;
+  if (/\bhope (you are|you're|ur) (doing )?(well|good)\b/i.test(output)) suspicion += 1;
+
+  return suspicion >= 2;
+}
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
@@ -63,6 +173,130 @@ export default function App() {
     return typeof message === "string" && /api key not found/i.test(message);
   }
 
+  function pushProcessStep(message, level = "info", detail = "") {
+    setProcessSteps((prev) => [
+      ...prev.slice(-11),
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        message,
+        level,
+        detail,
+        timestamp: new Date().toISOString(),
+      },
+    ]);
+  }
+
+  function startProcessLog(message, detail = "") {
+    setProcessSummary(message);
+    setProcessError("");
+    setProcessNeedsApiKey(false);
+    setProcessSteps([
+      {
+        id: `${Date.now()}-start`,
+        message,
+        level: "info",
+        detail,
+        timestamp: new Date().toISOString(),
+      },
+    ]);
+  }
+
+  function classifyRequestIssue(message) {
+    const normalized = String(message || "").toLowerCase();
+
+    if (!normalized) {
+      return {
+        summary: "Unknown request failure.",
+        detail: "",
+      };
+    }
+
+    if (normalized.includes("api key")) {
+      return {
+        summary: "Authentication failed.",
+        detail: "OpenRouter API key is missing, invalid, or unreadable.",
+      };
+    }
+
+    if (normalized.includes("desktop runtime required") || normalized.includes("tauri runtime")) {
+      return {
+        summary: "Desktop runtime unavailable.",
+        detail: "This request can only run inside the desktop app.",
+      };
+    }
+
+    if (normalized.includes("failed to reach openrouter")) {
+      return {
+        summary: "Network request failed.",
+        detail: "The app could not reach the model provider.",
+      };
+    }
+
+    if (normalized.includes("http ")) {
+      return {
+        summary: "Provider rejected the request.",
+        detail: "The model endpoint returned an HTTP error.",
+      };
+    }
+
+    if (normalized.includes("parse")) {
+      return {
+        summary: "Provider response could not be parsed.",
+        detail: "The app received malformed or unexpected model output.",
+      };
+    }
+
+    if (normalized.includes("empty response")) {
+      return {
+        summary: "Model returned no output.",
+        detail: "The request completed but produced no usable text.",
+      };
+    }
+
+    return {
+      summary: "Request failed.",
+      detail: message,
+    };
+  }
+
+  function logRequestFailure(prefix, message) {
+    const issue = classifyRequestIssue(message);
+    pushProcessStep(`${prefix} ${issue.summary}`, "error", issue.detail || message);
+    setProcessSummary(`${prefix} ${issue.summary}`);
+    setProcessError(message);
+    setProcessNeedsApiKey(String(message || "").toLowerCase().includes("api key"));
+  }
+
+  function completeProcess(summary) {
+    setProcessSummary(summary);
+    setProcessError("");
+    setProcessNeedsApiKey(false);
+  }
+
+  async function ensureApiKeyReady(actionLabel) {
+    if (!isTauriRuntime()) return true;
+    pushProcessStep("Checking API key availability.");
+    try {
+      const keyStatus = await getApiKeyStatus(runtimeConfig);
+      if (keyStatus?.hasKey) {
+        pushProcessStep("API key is available.", "success", keyStatus.source || "configured");
+        return true;
+      }
+      pushProcessStep("API key missing before request start.", "error", actionLabel);
+      setProcessSummary("Request blocked: authentication required.");
+      setProcessError(`OpenRouter API key is missing. Add it in settings before ${actionLabel}.`);
+      setProcessNeedsApiKey(true);
+      setApiKeyRequired(true);
+      setApiKeyModalOpen(true);
+      setError(`OpenRouter API key is missing. Add it in settings before ${actionLabel}.`);
+      return false;
+    } catch (error) {
+      const message = getErrorMessage(error);
+      pushProcessStep("Could not verify API key status.", "warning", message);
+      return true;
+    }
+  }
+
   // Core
   const [styles, setStyles]                     = useState({});
   const [activeProfileId, setActiveProfileId]   = useState(PROFILE_OPTIONS[0].id);
@@ -74,7 +308,10 @@ export default function App() {
   const [mode, setMode]             = useState("humanize");
   const [inputText, setInputText]   = useState("");
   const [outputText, setOutputText] = useState("");
+  const [outputBaseline, setOutputBaseline] = useState("");
   const [outputCopied, setOutputCopied] = useState(false);
+  const [showDiff, setShowDiff] = useState(false);
+  const [outputPhase, setOutputPhase] = useState("idle");
   const [toneLevel, setToneLevel]   = useState(2);
   const [stripCliches, setStripCliches] = useState(true);
   const [elabDepth, setElabDepth]   = useState(2);
@@ -86,23 +323,25 @@ export default function App() {
   const [logsOpen, setLogsOpen] = useState(false);
   const [requestLogs, setRequestLogs] = useState([]);
   const [logsLoading, setLogsLoading] = useState(false);
-  const [outputHistory, setOutputHistory] = useState([]);
-  const [historyIndex, setHistoryIndex] = useState(-1);
-  const [variants, setVariants] = useState([]);
-  const [selectedSentenceIndex, setSelectedSentenceIndex] = useState(null);
-  const [showDiff, setShowDiff] = useState(true);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-
-  // Spell check
-  const [spellResult, setSpellResult]     = useState(null);
-  const [spellLoading, setSpellLoading]   = useState(false);
-  const [expandedErrorPill, setExpandedErrorPill] = useState(null);
-  const [troubleWords, setTroubleWords]   = useState({});
-  const [grammarMode, setGrammarMode] = useState(false);
+  const [managementOpen, setManagementOpen] = useState(false);
+  const [globalHistoryOpen, setGlobalHistoryOpen] = useState(false);
+  const [globalHistoryQuery, setGlobalHistoryQuery] = useState("");
+  const [globalHistoryFilters, setGlobalHistoryFilters] = useState({
+    profileId: "",
+    mode: "",
+    model: "",
+    savedOnly: false,
+  });
+  const [historyState, setHistoryState] = useState(createEmptyOutputHistory());
+  const [activeSessionId, setActiveSessionId] = useState(null);
+  const [activeHistoryEntryId, setActiveHistoryEntryId] = useState(null);
+  const [selectedHistoryPreviewEntryId, setSelectedHistoryPreviewEntryId] = useState(null);
+  const [selectedGlobalHistoryEntryId, setSelectedGlobalHistoryEntryId] = useState(null);
 
   // Modals / dropdowns
   const [styleModalOpen, setStyleModalOpen]   = useState(false);
   const backupSyncReadyRef = useRef(false);
+  const historyStateRef = useRef(createEmptyOutputHistory());
 
   // Backup status
   const [backupStatus, setBackupStatus]         = useState("idle");
@@ -114,6 +353,10 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus]   = useState("");
   const [error, setError]     = useState("");
+  const [processSteps, setProcessSteps] = useState([]);
+  const [processSummary, setProcessSummary] = useState("");
+  const [processError, setProcessError] = useState("");
+  const [processNeedsApiKey, setProcessNeedsApiKey] = useState(false);
   const [apiKeyModalOpen, setApiKeyModalOpen] = useState(false);
   const [apiKeyRequired, setApiKeyRequired] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState("");
@@ -121,6 +364,84 @@ export default function App() {
   const [apiUrlInput, setApiUrlInput] = useState("");
   const [apiKeyFileInput, setApiKeyFileInput] = useState("");
   const [runtimeConfig, setRuntimeConfig] = useState({ apiUrl: "", apiKeyFile: "" });
+
+  useEffect(() => {
+    historyStateRef.current = historyState;
+  }, [historyState]);
+
+  function commitHistoryState(updater) {
+    setHistoryState((prev) => {
+      const draft = typeof updater === "function" ? updater(prev) : updater;
+      const next = pruneUnsavedEntries(draft);
+      historyStateRef.current = next;
+      saveOutputHistory(next);
+      return next;
+    });
+  }
+
+  function copyTextToClipboard(text, successMessage = "Copied.") {
+    if (!String(text || "").trim()) return;
+    if (!navigator?.clipboard?.writeText) {
+      setError("Clipboard copy is not available in this runtime.");
+      return;
+    }
+    navigator.clipboard.writeText(text)
+      .then(() => {
+        setStatus(successMessage);
+        setTimeout(() => setStatus(""), 1600);
+      })
+      .catch(() => {
+        setError("Failed to copy text.");
+      });
+  }
+
+  function buildSessionSeed(sourceText = inputText, currentMode = mode, profileId = activeProfileId) {
+    return {
+      mode: currentMode,
+      sourceTextSnapshot: sourceText,
+      threadKey: buildSessionThreadKey({
+        profileId,
+        mode: currentMode,
+        sourceText,
+      }),
+    };
+  }
+
+  function recordCompletedOutput(nextOutput) {
+    const payload = {
+      profileId: activeProfileId,
+      mode,
+      model: selectedModel,
+      sourceText: inputText,
+      baseOutputText: nextOutput,
+      currentOutputText: nextOutput,
+      oneOffInstruction,
+      formatPreset,
+      toneLevel,
+      stripCliches,
+      elabDepth,
+      status: "ready",
+      isSaved: false,
+      savedAt: null,
+    };
+    const sessionSeed = buildSessionSeed();
+    const { state: withSession, session } = getOrCreateActiveSession(
+      historyStateRef.current,
+      activeProfileId,
+      sessionSeed,
+      activeSessionId
+    );
+    const { state: appendedState, entry } = appendHistoryEntry(withSession, session.id, payload);
+    const nextState = pruneUnsavedEntries(appendedState);
+
+    historyStateRef.current = nextState;
+    setHistoryState(nextState);
+    saveOutputHistory(nextState);
+    setActiveSessionId(session.id);
+    setActiveHistoryEntryId(entry?.id || null);
+    setSelectedHistoryPreviewEntryId(entry?.id || null);
+    setSelectedGlobalHistoryEntryId(entry?.id || null);
+  }
 
   // Load persisted data
   useEffect(() => {
@@ -136,8 +457,8 @@ export default function App() {
         const storedStyles  = await load("styles-v3");
         const storedCliches = await load("cliches-v3");
         const storedTs      = await load("cliches-ts-v3");
-        const storedTrouble = await load("trouble-words-v1");
         const storedWriterDraft = await load(WRITER_DRAFT_KEY);
+        const storedOutputHistory = await loadOutputHistory();
         const storedRuntimeConfig = await load(RUNTIME_API_CONFIG_KEY);
         const storedModel = await load(MODEL_PREF_KEY);
         const storedCustomModels = await load(CUSTOM_MODELS_KEY);
@@ -179,8 +500,9 @@ export default function App() {
 
         if (storedCliches) setCliches(storedCliches);
         if (storedTs)      setClichesUpdatedAt(new Date(storedTs));
-        if (storedTrouble) setTroubleWords(storedTrouble);
         if (typeof storedWriterDraft === "string") setInputText(storedWriterDraft);
+        setHistoryState(storedOutputHistory);
+        historyStateRef.current = storedOutputHistory;
         const validCustomModels = Array.isArray(storedCustomModels)
           ? storedCustomModels
             .filter((item) => item && typeof item.value === "string" && item.value.trim())
@@ -223,7 +545,6 @@ export default function App() {
           clichesLoaded: Array.isArray(storedCliches) ? storedCliches.length : 0,
           clichesUpdatedAt: storedTs || null,
           writerDraftChars: typeof storedWriterDraft === "string" ? storedWriterDraft.length : 0,
-          troubleWordsCount: storedTrouble ? Object.keys(storedTrouble).length : 0,
           apiKeyPresent: hasKey,
           apiKeySource,
           clichesRefreshTriggered: stale,
@@ -249,6 +570,18 @@ export default function App() {
       hasActiveProfileData: !!styles[activeProfileId],
     }).catch(() => {});
   }, [activeProfileId, styles]);
+
+  const outputPanelRef = useRef(null);
+
+  useEffect(() => {
+    if (outputPhase !== "streaming") return;
+    const node = outputPanelRef.current;
+    if (!node || typeof node.scrollIntoView !== "function") return;
+    const frame = window.requestAnimationFrame(() => {
+      node.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [outputPhase]);
 
   async function saveStylesBackupWithRetry(stylesData) {
     const DELAYS = [1000, 2000, 4000];
@@ -292,7 +625,17 @@ export default function App() {
     save(CUSTOM_MODELS_KEY, customOnly);
   }, [modelOptions]);
   useEffect(() => { save(WRITER_DRAFT_KEY, inputText); }, [inputText]);
-  useEffect(() => { if (Object.keys(troubleWords).length) save("trouble-words-v1", troubleWords); }, [troubleWords]);
+  useEffect(() => {
+    if (outputPhase !== "ready" || !activeHistoryEntryId) return;
+    const entry = historyStateRef.current.entriesById[activeHistoryEntryId];
+    if (!entry || entry.currentOutputText === outputText) return;
+    const timer = setTimeout(() => {
+      commitHistoryState((prev) => updateHistoryEntry(prev, activeHistoryEntryId, {
+        currentOutputText: outputText,
+      }));
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [outputText, outputPhase, activeHistoryEntryId]);
 
   function addCustomModelFromDropdown() {
     const raw = window.prompt("Enter OpenRouter model id (example: openai/gpt-4o-mini)");
@@ -408,17 +751,20 @@ export default function App() {
       },
     };
 
+    await save(STYLE_MODAL_DRAFT_KEY, null);
     setStyles(nextStyles);
     await save("styles-v3", nextStyles);
     await saveStylesBackupWithRetry(nextStyles);
+    const nextHistoryState = deleteHistoryEntriesForProfile(historyStateRef.current, activeProfileId);
+    historyStateRef.current = nextHistoryState;
+    setHistoryState(nextHistoryState);
+    await saveOutputHistory(nextHistoryState);
+    setActiveSessionId(null);
+    setActiveHistoryEntryId(null);
+    setSelectedHistoryPreviewEntryId(null);
+    setSelectedGlobalHistoryEntryId(null);
 
-    setOutputText("");
-    setOutputHistory([]);
-    setHistoryIndex(-1);
-    setVariants([]);
-    setSelectedSentenceIndex(null);
-    setSpellResult(null);
-    setExpandedErrorPill(null);
+    clearOutputState();
     setStyleModalOpen(false);
     setStatus(`${profileName} profile reset to 0 samples.`);
     setTimeout(() => setStatus(""), 1500);
@@ -478,6 +824,81 @@ export default function App() {
     }
   }
 
+  async function fullAppDataReset() {
+    const confirmStep1 = window.confirm("Reset all app data? This erases profiles, backups, logs, settings, drafts, and API key.");
+    if (!confirmStep1) return;
+    const confirmStep2 = window.confirm("Are you absolutely sure? This action cannot be undone.");
+    if (!confirmStep2) return;
+
+    const typed = window.prompt('Type "RESET APP DATA" to confirm.', "");
+    if ((typed || "").trim().toUpperCase() !== "RESET APP DATA") {
+      setStatus("Full reset cancelled.");
+      setTimeout(() => setStatus(""), 1400);
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+    try {
+      await resetAppData(runtimeConfig);
+      await save(STYLE_MODAL_DRAFT_KEY, null);
+
+      setStyles({});
+      setActiveProfileId(PROFILE_OPTIONS[0].id);
+      setCliches(BASE_CLICHES);
+      setClichesUpdatedAt(null);
+      setClicheFetching(false);
+      setMode("humanize");
+      setInputText("");
+      clearOutputState();
+      setToneLevel(2);
+      setStripCliches(true);
+      setElabDepth(2);
+      setOneOffInstruction("");
+      setFormatPreset("none");
+      setThemeKey(APP_THEME_OPTIONS[0].value);
+      setModelOptions(MODEL_OPTIONS);
+      setSelectedModel(MODEL_OPTIONS[0].value);
+      setLogsOpen(false);
+      setRequestLogs([]);
+      setLogsLoading(false);
+      setManagementOpen(false);
+      setGlobalHistoryOpen(false);
+      setGlobalHistoryQuery("");
+      setGlobalHistoryFilters({ profileId: "", mode: "", model: "", savedOnly: false });
+      setHistoryState(createEmptyOutputHistory());
+      historyStateRef.current = createEmptyOutputHistory();
+      setActiveSessionId(null);
+      setActiveHistoryEntryId(null);
+      setSelectedHistoryPreviewEntryId(null);
+      setSelectedGlobalHistoryEntryId(null);
+      setStyleModalOpen(true);
+      setBackupStatus("idle");
+      setBackupLastSavedAt(null);
+      setBackupError("");
+      setProcessSteps([]);
+      setProcessSummary("");
+      setProcessError("");
+      setProcessNeedsApiKey(false);
+      setStatus("All app data reset.");
+      setApiKeyInput("");
+      setApiUrlInput("");
+      setApiKeyFileInput("");
+      setRuntimeConfig({ apiUrl: "", apiKeyFile: "" });
+      if (isTauriRuntime()) {
+        setApiKeyRequired(true);
+        setApiKeyModalOpen(true);
+      } else {
+        setApiKeyRequired(false);
+        setApiKeyModalOpen(false);
+      }
+    } catch (e) {
+      setError("Full reset failed: " + getErrorMessage(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   // ── Clichés ──
   async function refreshCliches() {
     setClicheFetching(true);
@@ -534,8 +955,10 @@ export default function App() {
     setError("");
     setLoading(true);
     setStatus(existing ? `Merging new samples into ${profileName} profile…` : `Analyzing ${profileName} profile…`);
+    startProcessLog(existing ? `Starting ${profileName} profile merge.` : `Starting ${profileName} profile analysis.`, `${filled.length} writing sample${filled.length === 1 ? "" : "s"} queued`);
 
     try {
+      pushProcessStep("Formatting writing samples for analysis.");
       const formatted = filled.map((sample, i) => formatSampleForPrompt(sample, i)).join("\n\n");
       const baseUserPrompt = existing
         ? `Existing profile:\n${JSON.stringify(existing.profile || {})}\n\nNew samples:\n${formatted}`
@@ -558,12 +981,15 @@ export default function App() {
       let lastParseError = null;
       for (let attempt = 0; attempt < attempts.length; attempt += 1) {
         const plan = attempts[attempt];
+        pushProcessStep("Sending profile request to model.", "info", `Attempt ${attempt + 1} via ${selectedModel}`);
         const raw = await llm(plan.systemPrompt, plan.userPrompt, plan.maxTokens, selectedModel, runtimeConfig);
         try {
           profile = parseJsonFromModelOutput(raw);
+          pushProcessStep("Profile response parsed successfully.", "success");
           break;
         } catch (parseErr) {
           lastParseError = parseErr;
+          pushProcessStep("Model response was not valid profile JSON.", "warning", `Attempt ${attempt + 1} failed parsing`);
           logDiagnosticEvent(
             "profile:train:json_parse_failed",
             {
@@ -610,14 +1036,18 @@ export default function App() {
       });
 
       setStatus(existing ? "Profile updated!" : "Profile created!");
+      pushProcessStep(existing ? "Profile merge complete." : "Profile analysis complete.", "success");
+      completeProcess(existing ? "Profile updated successfully." : "Profile created successfully.");
       setTimeout(() => { setStatus(""); setStyleModalOpen(false); }, 900);
       return true;
     } catch (e) {
       const message = getErrorMessage(e);
       if (isMissingApiKeyError(message)) {
+        pushProcessStep("OpenRouter API key missing. Opening API key dialog.", "error");
         setApiKeyRequired(true);
         setApiKeyModalOpen(true);
       }
+      logRequestFailure("Profile training failed.", message);
       setError("Failed: " + message);
       return false;
     } finally {
@@ -632,196 +1062,310 @@ export default function App() {
     return `${systemPrompt}\n\nExtra constraints:\n- ${extras.join("\n- ")}`;
   }
 
+  function clearOutputState() {
+    setOutputText("");
+    setOutputBaseline("");
+    setOutputCopied(false);
+    setShowDiff(true);
+    setOutputPhase("idle");
+    setActiveHistoryEntryId(null);
+    setSelectedHistoryPreviewEntryId(null);
+  }
+
+  function startOutputStream() {
+    setOutputText("");
+    setOutputBaseline("");
+    setOutputCopied(false);
+    setShowDiff(true);
+    setOutputPhase("streaming");
+    setActiveHistoryEntryId(null);
+    setSelectedHistoryPreviewEntryId(null);
+  }
+
   function commitOutput(nextOutput) {
+    const normalized = String(nextOutput || "");
+    setOutputText(normalized);
+    setOutputBaseline(normalized);
+    setOutputCopied(false);
+    setShowDiff(true);
+    setOutputPhase("ready");
+    recordCompletedOutput(normalized);
+  }
+
+  function handleOutputChange(nextOutput) {
     setOutputText(nextOutput);
-    setVariants([]);
-    setSelectedSentenceIndex(null);
-    setOutputHistory((prev) => {
-      const nextHistory = [...prev, nextOutput];
-      setHistoryIndex(nextHistory.length - 1);
-      return nextHistory;
+    setOutputCopied(false);
+  }
+
+  function copyOutput() {
+    if (!outputText.trim()) return;
+    copyTextToClipboard(outputText, "Output copied.");
+    setOutputCopied(true);
+    setTimeout(() => setOutputCopied(false), 1600);
+  }
+
+  function regenerateOutput() {
+    if (loading) return;
+    if (mode === "humanize") {
+      humanize();
+      return;
+    }
+    elaborate();
+  }
+
+  function regenerateOutputWithFeedback(feedback) {
+    if (loading) return;
+    const trimmedFeedback = String(feedback || "").trim();
+    if (!trimmedFeedback) {
+      regenerateOutput();
+      return;
+    }
+    if (mode === "humanize") {
+      humanize({ regenerateFeedback: trimmedFeedback });
+      return;
+    }
+    elaborate({ regenerateFeedback: trimmedFeedback });
+  }
+
+  function copyHistoryEntry(entry) {
+    if (!entry) return;
+    copyTextToClipboard(entry.currentOutputText, "History entry copied.");
+  }
+
+  function openGlobalHistory() {
+    setGlobalHistoryQuery("");
+    setGlobalHistoryFilters({
+      profileId: "",
+      mode: "",
+      model: "",
+      savedOnly: false,
     });
+    setGlobalHistoryOpen(true);
+  }
+
+  function copySessionHistoryPart(entryId, part) {
+    const entry = historyStateRef.current.entriesById[entryId];
+    if (!entry) return;
+    const text = part === "user" ? entry.sourceText : entry.baseOutputText;
+    if (!String(text || "").trim()) return;
+    copyTextToClipboard(text, part === "user" ? "User text copied." : "Model text copied.");
+  }
+
+  function toggleHistorySaved(entry) {
+    if (!entry) return;
+    commitHistoryState((prev) => toggleSavedHistoryEntry(prev, entry.id, !entry.isSaved));
+  }
+
+  function renameHistoryEntry(entry) {
+    if (!entry) return;
+    const nextTitle = window.prompt("Rename history entry", entry.title || "");
+    if (nextTitle == null) return;
+    const trimmed = nextTitle.trim();
+    if (!trimmed) return;
+    commitHistoryState((prev) => updateHistoryEntry(prev, entry.id, { title: trimmed }));
+  }
+
+  function removeHistoryEntry(entry) {
+    if (!entry) return;
+    const confirmed = window.confirm("Delete this history entry?");
+    if (!confirmed) return;
+    commitHistoryState((prev) => deleteHistoryEntry(prev, entry.id));
+    if (selectedGlobalHistoryEntryId === entry.id) setSelectedGlobalHistoryEntryId(null);
+    if (selectedHistoryPreviewEntryId === entry.id) setSelectedHistoryPreviewEntryId(null);
+    if (activeHistoryEntryId === entry.id) setActiveHistoryEntryId(null);
   }
 
   // ── Humanize ──
-  async function humanize() {
+  async function humanize({ regenerateFeedback = "" } = {}) {
     const activeProfile = styles[activeProfileId];
     if (!activeProfile) { setError("Onboard your writing profile first."); return; }
     if (inputText.trim().length < 20) { setError("Paste some text to humanize (20+ chars)."); return; }
     setError(""); setLoading(true); setStatus("Rewriting in your voice…");
+    startProcessLog("Starting rewrite request.", `Mode: humanize via ${selectedModel}`);
     try {
-      setOutputText("");
-      setVariants([]);
-      const out = await llmStream(
-        applyPromptDecorators(HUMANIZE_SYS(activeProfile.profile, toneLevel, stripCliches ? cliches : BASE_CLICHES.slice(0,10))),
-        `Rewrite:\n\n${inputText}`,
-        (_, full) => setOutputText(full),
-        2400,
-        selectedModel,
-        runtimeConfig
+      pushProcessStep("Validating profile and source text.");
+      if (!(await ensureApiKeyReady("rewriting text"))) return;
+      const basePrompt = applyPromptDecorators(
+        HUMANIZE_SYS(activeProfile.profile, toneLevel, stripCliches ? cliches : BASE_CLICHES.slice(0,10))
       );
+      const feedbackPrompt = regenerateFeedback.trim()
+        ? `Regeneration feedback:\n- ${regenerateFeedback.trim()}\n- Keep the same source intent while applying this feedback.`
+        : "";
+      const baseSystemPrompt = [basePrompt, feedbackPrompt].filter(Boolean).join("\n\n");
+      const streamRewrite = async (systemPrompt, userPrompt, firstChunkMessage) => {
+        startOutputStream();
+        let loggedFirstChunk = false;
+        return llmStream(
+          systemPrompt,
+          userPrompt,
+          (_, full) => {
+            if (!loggedFirstChunk) {
+              loggedFirstChunk = true;
+              pushProcessStep(firstChunkMessage, "info");
+            }
+            setOutputText(full);
+            setOutputBaseline(full);
+          },
+          2400,
+          selectedModel,
+          runtimeConfig
+        );
+      };
+
+      pushProcessStep("Preparing prompt and opening model stream.");
+      let out = await streamRewrite(
+        baseSystemPrompt,
+        buildHumanizeUserPrompt(inputText),
+        "Model stream connected. Receiving rewrite output."
+      );
+      if (outputLooksLikeAnsweredPrompt(inputText, out)) {
+        pushProcessStep("Draft looked like a reply instead of a rewrite. Retrying with stricter guardrails.", "info");
+        out = await streamRewrite(
+          `${baseSystemPrompt}\n\nCritical constraint:\n- Rewrite the source text itself and never answer it as though you are in a live conversation.`,
+          buildHumanizeUserPrompt(inputText, { strict: true }),
+          "Retry stream connected. Receiving guarded rewrite output."
+        );
+      }
+      if (!out.trim()) {
+        pushProcessStep("Model stream ended with no output.", "error");
+        const keyStatus = await getApiKeyStatus(runtimeConfig).catch(() => ({ hasKey: true }));
+        if (keyStatus && !keyStatus.hasKey) {
+          pushProcessStep("API key appears to be missing after empty response. Opening API key dialog.", "error");
+          setApiKeyRequired(true);
+          setApiKeyModalOpen(true);
+          throw new Error("OpenRouter API key is missing.");
+        }
+        throw new Error("The model returned an empty response.");
+      }
       commitOutput(out);
+      pushProcessStep("Rewrite completed successfully.", "success", `${countWords(out)} words generated`);
+      completeProcess("Rewrite completed successfully.");
       setStatus("");
     } catch (e) {
       const message = getErrorMessage(e);
       if (isMissingApiKeyError(message)) {
+        pushProcessStep("OpenRouter API key missing. Opening API key dialog.", "error");
         setApiKeyRequired(true);
         setApiKeyModalOpen(true);
       }
+      clearOutputState();
+      logRequestFailure("Rewrite request failed.", message);
       setError("Failed: " + message);
     }
     finally { setLoading(false); }
   }
 
   // ── Elaborate ──
-  async function elaborate() {
+  async function elaborate({ regenerateFeedback = "" } = {}) {
     const activeProfile = styles[activeProfileId];
     if (!activeProfile) { setError("Onboard your writing profile first."); return; }
     if (inputText.trim().length < 10) { setError("Write something to elaborate on."); return; }
     setError(""); setLoading(true); setStatus("Expanding your writing…");
+    startProcessLog("Starting expansion request.", `Mode: elaborate via ${selectedModel}`);
     try {
-      setOutputText("");
-      setVariants([]);
+      pushProcessStep("Validating profile and source text.");
+      if (!(await ensureApiKeyReady("expanding text"))) return;
+      startOutputStream();
+      pushProcessStep("Preparing prompt and opening model stream.");
+      let loggedFirstChunk = false;
+      const basePrompt = applyPromptDecorators(ELABORATE_SYS(activeProfile.profile, toneLevel, elabDepth));
+      const feedbackPrompt = regenerateFeedback.trim()
+        ? `Regeneration feedback:\n- ${regenerateFeedback.trim()}\n- Keep the same source intent while applying this feedback.`
+        : "";
       const out = await llmStream(
-        applyPromptDecorators(ELABORATE_SYS(activeProfile.profile, toneLevel, elabDepth)),
+        [basePrompt, feedbackPrompt].filter(Boolean).join("\n\n"),
         `Elaborate on:\n\n${inputText}`,
-        (_, full) => setOutputText(full),
+        (_, full) => {
+          if (!loggedFirstChunk) {
+            loggedFirstChunk = true;
+            pushProcessStep("Model stream connected. Receiving expanded draft.", "info");
+          }
+          setOutputText(full);
+          setOutputBaseline(full);
+        },
         2400,
         selectedModel,
         runtimeConfig
       );
+      if (!out.trim()) {
+        pushProcessStep("Model stream ended with no output.", "error");
+        const keyStatus = await getApiKeyStatus(runtimeConfig).catch(() => ({ hasKey: true }));
+        if (keyStatus && !keyStatus.hasKey) {
+          pushProcessStep("API key appears to be missing after empty response. Opening API key dialog.", "error");
+          setApiKeyRequired(true);
+          setApiKeyModalOpen(true);
+          throw new Error("OpenRouter API key is missing.");
+        }
+        throw new Error("The model returned an empty response.");
+      }
       commitOutput(out);
+      pushProcessStep("Expansion completed successfully.", "success", `${countWords(out)} words generated`);
+      completeProcess("Expansion completed successfully.");
       setStatus("");
     } catch (e) {
       const message = getErrorMessage(e);
       if (isMissingApiKeyError(message)) {
+        pushProcessStep("OpenRouter API key missing. Opening API key dialog.", "error");
         setApiKeyRequired(true);
         setApiKeyModalOpen(true);
       }
+      clearOutputState();
+      logRequestFailure("Expansion request failed.", message);
       setError("Failed: " + message);
     }
     finally { setLoading(false); }
   }
 
-  async function generateVariants() {
-    const activeProfile = styles[activeProfileId];
-    if (!activeProfile || !outputText.trim()) return;
-    setError("");
-    setLoading(true);
-    setStatus("Generating variants…");
-    try {
-      const raw = await llm(
-        applyPromptDecorators(HUMANIZE_SYS(activeProfile.profile, toneLevel, stripCliches ? cliches : BASE_CLICHES.slice(0, 10))),
-        `Create exactly 3 rewrite variants of this text.\nReturn ONLY JSON array of strings.\n\nText:\n${inputText}`,
-        2800,
-        selectedModel,
-        runtimeConfig
-      );
-      const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim());
-      const cleaned = Array.isArray(parsed) ? parsed.filter((item) => typeof item === "string" && item.trim()) : [];
-      setVariants(cleaned.slice(0, 3));
-      setStatus("");
-    } catch (e) {
-      const message = getErrorMessage(e);
-      if (isMissingApiKeyError(message)) {
-        setApiKeyRequired(true);
-        setApiKeyModalOpen(true);
-      }
-      setError(`Failed to generate variants: ${message}`);
-    } finally {
-      setLoading(false);
+  const activeSession = activeSessionId ? historyState.sessionsById[activeSessionId] || null : null;
+  const sessionEntries = activeSession && activeSession.profileId === activeProfileId
+    ? listSessionEntries(historyState, activeSessionId)
+    : [];
+  const globalHistoryEntries = searchHistoryEntries(historyState, globalHistoryQuery, globalHistoryFilters);
+  const selectedGlobalHistoryEntry = selectedGlobalHistoryEntryId
+    ? historyState.entriesById[selectedGlobalHistoryEntryId] || null
+    : globalHistoryEntries[0] || null;
+  const historyProfileOptions = PROFILE_OPTIONS.map((profile) => ({
+    value: profile.id,
+    label: profile.label,
+  }));
+  const historyModelOptions = modelOptions.map((model) => ({
+    value: model.value,
+    label: model.label,
+  }));
+
+  useEffect(() => {
+    if (!globalHistoryEntries.length) {
+      setSelectedGlobalHistoryEntryId(null);
+      return;
     }
-  }
-
-  async function rewriteSentence() {
-    const activeProfile = styles[activeProfileId];
-    const sentences = splitSentences(outputText);
-    if (!activeProfile || selectedSentenceIndex == null || !sentences[selectedSentenceIndex]) return;
-    setLoading(true);
-    setStatus("Rewriting selected sentence…");
-    setError("");
-    try {
-      const target = sentences[selectedSentenceIndex];
-      const rewritten = await llm(
-        applyPromptDecorators(HUMANIZE_SYS(activeProfile.profile, toneLevel, stripCliches ? cliches : BASE_CLICHES.slice(0, 10))),
-        `Rewrite only this sentence while preserving meaning:\n${target}`,
-        900,
-        selectedModel,
-        runtimeConfig
-      );
-      sentences[selectedSentenceIndex] = rewritten.trim();
-      commitOutput(sentences.join(" "));
-      setStatus("");
-    } catch (e) {
-      const message = getErrorMessage(e);
-      if (isMissingApiKeyError(message)) {
-        setApiKeyRequired(true);
-        setApiKeyModalOpen(true);
-      }
-      setError(`Failed to rewrite sentence: ${message}`);
-    } finally {
-      setLoading(false);
+    if (!selectedGlobalHistoryEntryId || !historyState.entriesById[selectedGlobalHistoryEntryId]) {
+      setSelectedGlobalHistoryEntryId(globalHistoryEntries[0].id);
     }
-  }
+  }, [globalHistoryEntries, selectedGlobalHistoryEntryId, historyState.entriesById]);
 
-  function applyVariant(variantText) {
-    if (!variantText) return;
-    commitOutput(variantText);
-  }
-
-  // ── Spell Check ──
-  async function checkSpelling() {
-    if (inputText.trim().length < 3) { setError("Type some text to check."); return; }
-    setError(""); setSpellLoading(true); setSpellResult(null); setExpandedErrorPill(null);
-    try {
-      const raw = await llm(SPELLCHECK_SYS(grammarMode), `Check this text:\n\n${inputText}`, 2200, selectedModel, runtimeConfig);
-      const parsed = JSON.parse(raw.replace(/```json|```/g,"").trim());
-      setSpellResult(parsed);
-      if (parsed.errors?.length) {
-        setTroubleWords(prev => {
-          const updated = { ...prev };
-          parsed.errors.forEach(e => {
-            const key = e.wrong.toLowerCase();
-            updated[key] = { correct: e.correct, wrong: e.wrong, rule: e.rule, trick: e.trick, etymology: e.etymology, category: e.category, count: (prev[key]?.count || 0) + 1, lastSeen: new Date().toISOString() };
-          });
-          return updated;
-        });
-      }
-    } catch (e) {
-      const message = getErrorMessage(e);
-      if (isMissingApiKeyError(message)) {
-        setApiKeyRequired(true);
-        setApiKeyModalOpen(true);
-      }
-      setError("Spell check failed: " + message);
+  useEffect(() => {
+    if (!sessionEntries.length) {
+      setSelectedHistoryPreviewEntryId(null);
+      return;
     }
-    finally { setSpellLoading(false); }
-  }
-
-  function copy(text, setFn) { navigator.clipboard.writeText(text); setFn(true); setTimeout(() => setFn(false), 2000); }
+    if (!selectedHistoryPreviewEntryId || !sessionEntries.some((entry) => entry.id === selectedHistoryPreviewEntryId)) {
+      setSelectedHistoryPreviewEntryId(sessionEntries[sessionEntries.length - 1].id);
+    }
+  }, [sessionEntries, selectedHistoryPreviewEntryId]);
 
   const activeProfile = styles[activeProfileId] || null;
   const hasProfile = hasTrainedProfile(activeProfile);
   const health = computeProfileHealth(activeProfile);
-  const clicheRanges = buildClicheRanges(inputText, cliches);
   const words = countWords(inputText);
-  const sentenceOptions = splitSentences(outputText);
 
   const handleInputChange = (val) => {
     setInputText(val);
-    setOutputText("");
-    setVariants([]);
-    setSelectedSentenceIndex(null);
-    setSpellResult(null);
-    setExpandedErrorPill(null);
+    clearOutputState();
   };
 
   const handleModeChange = (m) => {
     setMode(m);
-    setOutputText("");
-    setVariants([]);
-    setSelectedSentenceIndex(null);
-    setSpellResult(null);
+    clearOutputState();
   };
 
   useEffect(() => {
@@ -831,169 +1375,252 @@ export default function App() {
         if (mode === "humanize") humanize();
         else elaborate();
       }
-      if (event.metaKey && event.shiftKey && event.key.toLowerCase() === "c" && outputText) {
-        event.preventDefault();
-        copy(outputText, setOutputCopied);
-      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [mode, outputText, inputText, styles, activeProfileId, toneLevel, stripCliches, cliches, selectedModel, elabDepth, oneOffInstruction, formatPreset, runtimeConfig]);
+  }, [mode, inputText, styles, activeProfileId, toneLevel, stripCliches, cliches, selectedModel, elabDepth, oneOffInstruction, formatPreset, runtimeConfig]);
 
-  function goHistory(offset) {
-    const nextIndex = historyIndex + offset;
-    if (nextIndex < 0 || nextIndex >= outputHistory.length) return;
-    setHistoryIndex(nextIndex);
-    setOutputText(outputHistory[nextIndex]);
-    setSelectedSentenceIndex(null);
-  }
-
+  const hasCompletedOutput = outputPhase === "ready" && outputText.trim().length > 0;
+  const isStreamingOutput = outputPhase === "streaming";
+  const outputEdited = hasCompletedOutput && outputText !== outputBaseline;
+  const metricSnapshotBefore = computeTextMetricSnapshot(inputText);
+  const metricSnapshotAfter = computeTextMetricSnapshot(outputText);
+  const readabilityBefore = metricSnapshotBefore.readability;
+  const readabilityAfter = metricSnapshotAfter.readability;
+  const outputDelta = computeWordCharDelta(inputText, outputText);
   const activeTheme = APP_THEME_OPTIONS.find((theme) => theme.value === themeKey) || APP_THEME_OPTIONS[0];
+  const requestProgressLabel = status || processSummary || (mode === "humanize" ? "Rewriting in your voice..." : "Expanding your writing...");
+  const requestProgressTone = processError ? "error" : processNeedsApiKey ? "warning" : "neutral";
 
   return (
-    <div style={{ ...S.root, "--accent": activeTheme.accent }} data-theme={activeTheme.value}>
-      <GlobalStyles accent={activeTheme.accent} />
+    <div className="app-root" style={{ "--accent": activeTheme.accent }} data-theme={activeTheme.value}>
 
       <Topbar
         activeProfileId={activeProfileId}
         onProfileChange={setActiveProfileId}
-        themeKey={themeKey}
-        onThemeChange={setThemeKey}
         hasProfile={hasProfile}
         activeProfile={activeProfile}
-        health={health}
         backupStatus={backupStatus}
         backupLastSavedAt={backupLastSavedAt}
         backupError={backupError}
         onRetryBackup={() => saveStylesBackupWithRetry(styles)}
-        clichesUpdatedAt={clichesUpdatedAt}
-        cliches={cliches}
-        onRefreshCliches={refreshCliches}
-        clicheFetching={clicheFetching}
         onOpenStyleModal={() => setStyleModalOpen(true)}
-        onExportProfile={exportProfile}
-        onImportProfile={importProfile}
-        onOpenApiKey={() => setApiKeyModalOpen(true)}
-        onResetProfile={resetActiveProfile}
-        settingsOpen={settingsOpen}
-        onToggleSettings={() => setSettingsOpen((value) => !value)}
-        onCloseSettings={() => setSettingsOpen(false)}
+        onOpenHistory={openGlobalHistory}
+        onOpenManagement={() => setManagementOpen(true)}
       />
 
-      <main style={S.main}>
+      {(error || (status && !loading)) && (
+        <div className="app-notification-layer" aria-live="polite" aria-atomic="true">
+          {error && (
+            <div className="toast toast-error app-popup-notification" role="alert">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              <span style={{ flex: 1 }}>{error}</span>
+              <button onClick={() => setError("")} style={{ border: 0, background: "transparent", cursor: "pointer", color: "inherit" }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+          )}
+          {status && !loading && (
+            <div className="toast toast-success app-popup-notification" role="status">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+              {status}
+            </div>
+          )}
+        </div>
+      )}
 
-        {/* Toasts */}
-        {error && (
-          <div style={{ ...S.toast, ...S.toastError }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-            <span style={{ flex: 1 }}>{error}</span>
-            <button onClick={() => setError("")} style={S.toastClose}>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            </button>
+      <main className="app-shell panel-grid app-workspace">
+
+        <section className="app-primary-column">
+          <div className={`app-editor-stack${isStreamingOutput || hasCompletedOutput ? " app-editor-stack--with-output" : ""}`}>
+            <div className={`app-editor-sticky${isStreamingOutput || hasCompletedOutput ? " app-editor-sticky--with-output" : ""}`}>
+              <WriterPanel
+                inputText={inputText}
+                onChange={handleInputChange}
+                mode={mode}
+                onModeChange={handleModeChange}
+                loading={loading}
+                progressLabel={requestProgressLabel}
+                progressTone={requestProgressTone}
+                hasStyle={hasProfile}
+                words={words}
+                cliches={cliches}
+                toneLevel={toneLevel}
+                onToneLevelChange={setToneLevel}
+                stripCliches={stripCliches}
+                onStripClichesChange={setStripCliches}
+                elabDepth={elabDepth}
+                onElabDepthChange={setElabDepth}
+                formatPreset={formatPreset}
+                onFormatPresetChange={setFormatPreset}
+                oneOffInstruction={oneOffInstruction}
+                onOneOffInstructionChange={setOneOffInstruction}
+                selectedModel={selectedModel}
+                onModelChange={setSelectedModel}
+                modelOptions={modelOptions}
+                onAddModel={addCustomModelFromDropdown}
+                onSubmit={mode === "humanize" ? humanize : elaborate}
+              />
+            </div>
+            {isStreamingOutput || hasCompletedOutput ? (
+              <section ref={outputPanelRef} className="app-inline-output-panel">
+                <OutputPanel
+                  mode={mode}
+                  originalText={inputText}
+                  outputText={outputText}
+                  isStreaming={isStreamingOutput}
+                  onOutputChange={handleOutputChange}
+                  showDiff={showDiff}
+                  onToggleDiff={() => setShowDiff((prev) => !prev)}
+                  isEdited={outputEdited}
+                  readabilityBefore={readabilityBefore}
+                  readabilityAfter={readabilityAfter}
+                  metricSnapshotBefore={metricSnapshotBefore}
+                  metricSnapshotAfter={metricSnapshotAfter}
+                  delta={outputDelta}
+                  copied={outputCopied}
+                  onCopy={copyOutput}
+                  onRegenerate={regenerateOutput}
+                  onRegenerateWithFeedback={regenerateOutputWithFeedback}
+                  sessionEntries={sessionEntries}
+                  selectedHistoryPreviewEntryId={selectedHistoryPreviewEntryId}
+                  onSelectHistoryPreview={setSelectedHistoryPreviewEntryId}
+                  onCopySessionHistoryPart={copySessionHistoryPart}
+                />
+              </section>
+            ) : null}
           </div>
-        )}
-        {status && !loading && (
-          <div style={{ ...S.toast, ...S.toastSuccess }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg>
-            {status}
-          </div>
-        )}
-
-        <ControlsBar
-          mode={mode}
-          onModeChange={handleModeChange}
-          modelOptions={modelOptions}
-          selectedModel={selectedModel}
-          onModelChange={setSelectedModel}
-          onAddModel={addCustomModelFromDropdown}
-          toneLevel={toneLevel}
-          onToneLevelChange={setToneLevel}
-          stripCliches={stripCliches}
-          onStripClichesChange={setStripCliches}
-          elabDepth={elabDepth}
-          onElabDepthChange={setElabDepth}
-          formatPreset={formatPreset}
-          onFormatPresetChange={setFormatPreset}
-          oneOffInstruction={oneOffInstruction}
-          onOneOffInstructionChange={setOneOffInstruction}
-        />
-
-        {!!health.missingTypes.length && (
-          <div style={{ ...S.ctrlLabel, marginBottom: 12 }}>
-            Coverage gaps: {health.missingTypes.join(", ")}
-          </div>
-        )}
-
-        <WriterPanel
-          inputText={inputText}
-          onChange={handleInputChange}
-          mode={mode}
-          spellErrors={spellResult?.errors || []}
-          loading={loading}
-          spellLoading={spellLoading}
-          grammarMode={grammarMode}
-          onGrammarModeChange={setGrammarMode}
-          hasStyle={hasProfile}
-          words={words}
-          clicheRanges={clicheRanges}
-          onCheckSpelling={checkSpelling}
-          onSubmit={mode === "humanize" ? humanize : elaborate}
-        />
-
-        {spellResult && (
-          <SpellResultsBar
-            spellResult={spellResult}
-            expandedPill={expandedErrorPill}
-            onExpandPill={setExpandedErrorPill}
-            onUseCorrection={() => { setInputText(spellResult.correctedText); setSpellResult(null); setExpandedErrorPill(null); }}
-            onDismiss={() => { setSpellResult(null); setExpandedErrorPill(null); }}
-          />
-        )}
-
-        {outputText && (
-          <OutputPanel
-            mode={mode}
-            originalText={inputText}
-            outputText={outputText}
-            elabDepth={elabDepth}
-            copied={outputCopied}
-            variants={variants}
-            sentenceOptions={sentenceOptions}
-            selectedSentenceIndex={selectedSentenceIndex}
-            onSelectSentence={setSelectedSentenceIndex}
-            onRewriteSentence={rewriteSentence}
-            onGenerateVariants={generateVariants}
-            onApplyVariant={applyVariant}
-            showDiff={showDiff}
-            onToggleDiff={() => setShowDiff((value) => !value)}
-            readabilityBefore={computeReadabilityScore(inputText)}
-            readabilityAfter={computeReadabilityScore(outputText)}
-            delta={computeWordCharDelta(inputText, outputText)}
-            historyIndex={historyIndex}
-            historySize={outputHistory.length}
-            onHistoryPrev={() => goHistory(-1)}
-            onHistoryNext={() => goHistory(1)}
-            onCopy={() => copy(outputText, setOutputCopied)}
-            onAppend={() => { setInputText(inputText + " " + outputText); setOutputText(""); }}
-            onDiscard={() => setOutputText("")}
-          />
-        )}
-
-        <DiagnosticsPanel
-          logsOpen={logsOpen}
-          onToggle={(e) => setLogsOpen(e.currentTarget.open)}
-          requestLogs={requestLogs}
-          logsLoading={logsLoading}
-          onRefresh={async () => setRequestLogs(await loadRequestLogs())}
-          onClear={async () => { await clearRequestLogs(); setRequestLogs([]); }}
-        />
-
+        </section>
       </main>
+
+      <Button
+        className="logs-fab"
+        color={logsOpen || processSteps.length ? "primary" : "default"}
+        variant={logsOpen || processSteps.length ? "solid" : "bordered"}
+        onPress={() => setLogsOpen(true)}
+        aria-label="Open logs drawer"
+        tooltip="Open logs"
+        iconOnly
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M8 6h13" />
+          <path d="M8 12h13" />
+          <path d="M8 18h13" />
+          <path d="M3 6h.01" />
+          <path d="M3 12h.01" />
+          <path d="M3 18h.01" />
+        </svg>
+      </Button>
+
+      <Drawer
+        opened={globalHistoryOpen}
+        onClose={() => setGlobalHistoryOpen(false)}
+        position="right"
+        size={860}
+        offset={20}
+        zIndex={395}
+        title={<strong className="drawer-title">Output History</strong>}
+        classNames={{
+          content: "settings-drawer output-history-drawer",
+          header: "editor-settings-drawer-header",
+          body: "panel-grid editor-settings-drawer-body",
+        }}
+        overlayProps={{ backgroundOpacity: 0.16, blur: 4 }}
+        transitionProps={{ duration: 0 }}
+      >
+        <OutputHistoryDrawer
+          entries={globalHistoryEntries}
+          selectedEntry={selectedGlobalHistoryEntry}
+          query={globalHistoryQuery}
+          onQueryChange={setGlobalHistoryQuery}
+          filters={globalHistoryFilters}
+          onFilterChange={(patch) => setGlobalHistoryFilters((prev) => ({ ...prev, ...patch }))}
+          profileOptions={historyProfileOptions}
+          modelOptions={historyModelOptions}
+          onSelectEntry={setSelectedGlobalHistoryEntryId}
+          onCopyEntry={copyHistoryEntry}
+          onToggleSaved={toggleHistorySaved}
+          onRenameEntry={renameHistoryEntry}
+          onDeleteEntry={removeHistoryEntry}
+        />
+      </Drawer>
+
+      <Drawer
+        opened={logsOpen}
+        onClose={() => setLogsOpen(false)}
+        position="right"
+        size={460}
+        offset={20}
+        zIndex={390}
+        title={<strong className="drawer-title">Logs</strong>}
+        classNames={{
+          content: "settings-drawer logs-drawer",
+          header: "editor-settings-drawer-header",
+          body: "panel-grid editor-settings-drawer-body logs-drawer-body",
+        }}
+        overlayProps={{ backgroundOpacity: 0.14, blur: 3 }}
+        transitionProps={{ duration: 0 }}
+      >
+        <section className="panel-grid">
+          <div className="text-mono logs-section-label">Process</div>
+          {processSteps.length ? (
+            <ProcessLogPanel steps={processSteps} compact />
+          ) : (
+            <div className="logs-empty-state">No process steps yet.</div>
+          )}
+        </section>
+
+        <section className="panel-grid">
+          <div className="text-mono logs-section-label">Diagnostics</div>
+          <DiagnosticsPanel
+            requestLogs={requestLogs}
+            logsLoading={logsLoading}
+            onRefresh={async () => setRequestLogs(await loadRequestLogs())}
+            onClear={async () => { await clearRequestLogs(); setRequestLogs([]); }}
+            collapsible={false}
+          />
+        </section>
+      </Drawer>
+
+      <Drawer
+        opened={managementOpen}
+        onClose={() => setManagementOpen(false)}
+        position="right"
+        size={420}
+        offset={20}
+        zIndex={400}
+        title={<strong className="drawer-title">Profile & App</strong>}
+        classNames={{
+          content: "settings-drawer management-drawer",
+          header: "editor-settings-drawer-header",
+          body: "panel-grid editor-settings-drawer-body",
+        }}
+        overlayProps={{ backgroundOpacity: 0.18, blur: 4 }}
+        transitionProps={{ duration: 0 }}
+      >
+        <ManagementPanel
+          themeKey={themeKey}
+          onThemeChange={setThemeKey}
+          clichesUpdatedAt={clichesUpdatedAt}
+          cliches={cliches}
+          onRefreshCliches={refreshCliches}
+          clicheFetching={clicheFetching}
+          hasProfile={hasProfile}
+          onExportProfile={exportProfile}
+          onImportProfile={importProfile}
+          onOpenApiKey={() => setApiKeyModalOpen(true)}
+          onResetProfile={resetActiveProfile}
+          onFullAppReset={fullAppDataReset}
+        />
+      </Drawer>
 
       {styleModalOpen && (
         <StyleModal
           hasProfile={hasProfile}
           loading={loading}
+          health={health}
+          profileLabel={PROFILE_OPTIONS.find((profile) => profile.id === activeProfileId)?.label || activeProfile?.name}
+          sampleCount={activeProfile?.sampleEntries?.length || activeProfile?.sampleCount || 0}
           onTrainProfile={trainProfile}
           onClose={() => setStyleModalOpen(false)}
         />
@@ -1028,8 +1655,6 @@ export default function App() {
           onClose={() => { if (!apiKeyRequired) setApiKeyModalOpen(false); }}
         />
       )}
-
-      {loading && <LoadingOverlay status={status} />}
     </div>
   );
 }
@@ -1042,6 +1667,7 @@ export {
   collectCoverageGaps,
   computeProfileHealth,
   computeReadabilityScore,
+  computeTextMetricSnapshot,
   computeWordCharDelta,
   countWords,
   formatSampleForPrompt,

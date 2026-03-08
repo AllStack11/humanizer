@@ -1,4 +1,5 @@
-import { S } from '../styles/index.js';
+import { Modal } from "@mantine/core";
+import { Button, Input } from "./AppUI.jsx";
 
 export default function ApiKeyModal({
   required,
@@ -14,50 +15,86 @@ export default function ApiKeyModal({
   onClose,
 }) {
   return (
-    <div style={S.modalOverlay} onClick={onClose}>
-      <div style={S.modalPanel} onClick={(e) => e.stopPropagation()}>
-        <div style={S.modalHeader}>
-          <h2 style={S.modalTitle}>OpenRouter API Key</h2>
-          <button onClick={onClose} style={S.modalClose} disabled={required}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
-        </div>
-        <div style={{ marginBottom: 14, color: "#6b5d52", fontSize: 13, lineHeight: 1.6 }}>
-          Configure endpoint + secret storage. For localhost providers (for example Ollama), API key can be empty.
-        </div>
-        <input
-          value={apiUrl}
-          onChange={(e) => onApiUrlChange(e.target.value)}
-          placeholder="API URL (optional): https://openrouter.ai/api/v1/chat/completions"
-          style={{ ...S.textInput, marginBottom: 10 }}
-        />
-        <input
-          value={apiKeyFile}
-          onChange={(e) => onApiKeyFileChange(e.target.value)}
-          placeholder="Key file path (optional): .voice-humanizer/openrouter_api_key"
-          style={{ ...S.textInput, marginBottom: 10 }}
-        />
-        <input
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder="sk-or-..."
-          style={S.textInput}
-          autoFocus
-        />
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 16, gap: 10 }}>
-          <button onClick={onClear} disabled={loading} style={S.ghostBtn} className="btn">
-            Clear Saved Key
-          </button>
-          <button
-            onClick={onSave}
-            disabled={loading || !value.trim()}
-            style={{ ...S.submitBtn, ...(loading || !value.trim() ? S.submitBtnDisabled : {}) }}
-            className="btn"
+    <Modal
+      opened
+      onClose={onClose}
+      centered
+      size="lg"
+      withCloseButton={false}
+      closeOnClickOutside={!required}
+      classNames={{ content: "modal-content", body: "panel-grid" }}
+    >
+        <div className="toolbar-row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
+          <h2 style={{ margin: 0 }}>OpenRouter API Key</h2>
+          <Button
+            variant="light"
+            onPress={onClose}
+            isDisabled={required}
+            aria-label="Close API key modal"
+            tooltip="Dismiss API key settings"
+            iconOnly
           >
-            {loading ? "Saving…" : "Save Key"}
-          </button>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M18 6 6 18" />
+              <path d="m6 6 12 12" />
+            </svg>
+          </Button>
         </div>
-      </div>
-    </div>
+
+        <p style={{ marginTop: 0, marginBottom: 14, fontSize: 13, color: "#655d52" }}>
+          Configure endpoint + secret storage. For localhost providers (for example Ollama), API key can be empty.
+        </p>
+
+        <div className="panel-grid">
+          <Input
+            value={apiUrl}
+            onChange={(e) => onApiUrlChange(e.target.value)}
+            placeholder="API URL (optional): https://openrouter.ai/api/v1/chat/completions"
+          />
+          <Input
+            value={apiKeyFile}
+            onChange={(e) => onApiKeyFileChange(e.target.value)}
+            placeholder="Key file path (optional): .voice-humanizer/openrouter_api_key"
+          />
+          <Input value={value} onChange={(e) => onChange(e.target.value)} placeholder="sk-or-..." autoFocus />
+        </div>
+
+        <div className="toolbar-row" style={{ justifyContent: "space-between", marginTop: 16 }}>
+          <Button
+            variant="bordered"
+            onPress={onClear}
+            isDisabled={loading}
+            aria-label="Clear saved key"
+            tooltip="Remove the saved API key from local storage"
+            iconOnly
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M3 6h18" />
+              <path d="M8 6V4h8v2" />
+              <path d="m19 6-1 14H6L5 6" />
+            </svg>
+          </Button>
+          <Button
+            color="primary"
+            onPress={onSave}
+            isDisabled={loading || !value.trim()}
+            aria-label={loading ? "Saving API key" : "Save API key"}
+            tooltip={loading ? "Saving provider settings" : "Save the API key and provider settings"}
+            iconOnly
+          >
+            {loading ? (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 12a9 9 0 1 1-9-9" />
+              </svg>
+            ) : (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z" />
+                <path d="M17 21v-8H7v8" />
+                <path d="M7 3v5h8" />
+              </svg>
+            )}
+          </Button>
+        </div>
+    </Modal>
   );
 }

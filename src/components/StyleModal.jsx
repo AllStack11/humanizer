@@ -1,81 +1,60 @@
 import { useState, useEffect } from "react";
-import { load, save } from '../lib/storage.js';
-import { normalizeSampleSlot, getFilledSlots, resolveSampleType } from '../utils/profile.js';
-import { WRITING_SAMPLE_TYPES, DEFAULT_SAMPLE_TYPE, DEFAULT_SLOTS, STYLE_MODAL_DRAFT_KEY } from '../constants/index.js';
-import { S } from '../styles/index.js';
+import { Modal, NativeSelect } from "@mantine/core";
+import { Button, Card, TextArea } from "./AppUI.jsx";
+import { load, save } from "../lib/storage.js";
+import { normalizeSampleSlot, getFilledSlots, resolveSampleType } from "../utils/profile.js";
+import { WRITING_SAMPLE_TYPES, DEFAULT_SAMPLE_TYPE, DEFAULT_SLOTS, STYLE_MODAL_DRAFT_KEY } from "../constants/index.js";
 
-export default function StyleModal({ hasProfile, loading, onTrainProfile, onClose }) {
-  const initialSlots = DEFAULT_SLOTS.slice(0, 1).map((slot, i) => normalizeSampleSlot(slot, i + 1));
+function ModalIcon({ children }) {
+  return (
+    <span
+      aria-hidden="true"
+      style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+    >
+      {children}
+    </span>
+  );
+}
+
+export default function StyleModal({ hasProfile, loading, health, profileLabel, sampleCount = 0, onTrainProfile, onClose }) {
+  const initialSlots = DEFAULT_SLOTS.slice(0, 1).map((slot, index) => normalizeSampleSlot(slot, index + 1));
   const [trainSlots, setTrainSlots] = useState(initialSlots);
   const [poolInput, setPoolInput] = useState("");
   const [poolType, setPoolType] = useState(DEFAULT_SAMPLE_TYPE);
   const [dropActive, setDropActive] = useState(false);
 
   const filledSlots = getFilledSlots(trainSlots);
-  const totalChars = trainSlots.reduce((s, t) => s + t.text.trim().length, 0);
+  const totalChars = trainSlots.reduce((sum, slot) => sum + slot.text.trim().length, 0);
 
   function nextSlotId(slots) {
     if (!slots.length) return 1;
     return Math.max(...slots.map((slot) => slot.id)) + 1;
   }
 
-  function addBlankPiece() {
-    setTrainSlots((prev) => [
-      ...prev,
-      normalizeSampleSlot({ id: nextSlotId(prev), text: "", type: poolType }, nextSlotId(prev)),
-    ]);
+  function getSampleTypeLabel(rawType) {
+    const resolvedType = resolveSampleType(rawType);
+    return WRITING_SAMPLE_TYPES.find((type) => type.value === resolvedType)?.label || "Writing";
   }
 
-  function splitPoolTextIntoPieces(rawText, type) {
+  function addBlankPiece() {
+    const nextType = resolveSampleType(poolType);
+    setTrainSlots((prev) => [...prev, normalizeSampleSlot({ id: nextSlotId(prev), text: "", type: nextType }, nextSlotId(prev))]);
+  }
+
+  function splitPoolTextIntoPieces(rawText) {
     const raw = (rawText || "").trim();
     if (!raw) return [];
-
-    const chunks = raw
-      .split(/\n{2,}/)
-      .map((chunk) => chunk.trim())
-      .filter(Boolean);
-    const pieces = chunks.length > 1 ? chunks : [raw];
-    if (type !== "question") return pieces;
-
-    const looksQuestionLike = (text) => {
-      const trimmed = text.trim();
-      return /^q(?:uestion)?\s*[:\-]/i.test(trimmed) || trimmed.endsWith("?");
-    };
-
-    const hasInlineQaPair = (text) => /q(?:uestion)?\s*[:\-][\s\S]*a(?:nswer)?\s*[:\-]/i.test(text);
-
-    const combined = [];
-    for (let i = 0; i < pieces.length; i += 1) {
-      const current = pieces[i];
-      const next = pieces[i + 1];
-
-      if (hasInlineQaPair(current)) {
-        combined.push(current);
-        continue;
-      }
-
-      if (looksQuestionLike(current) && next) {
-        combined.push(`${current}\n\n${next}`);
-        i += 1;
-        continue;
-      }
-
-      combined.push(current);
-    }
-
-    return combined;
+    return [raw];
   }
 
   function appendPoolText(rawText, type = poolType) {
-    const pieces = splitPoolTextIntoPieces(rawText, type);
+    const pieces = splitPoolTextIntoPieces(rawText);
     if (!pieces.length) return;
+    const resolvedType = resolveSampleType(type);
 
     setTrainSlots((prev) => {
       let idCursor = nextSlotId(prev);
-      const additions = pieces.map((piece) => normalizeSampleSlot(
-        { id: idCursor++, text: piece, type },
-        idCursor
-      ));
+      const additions = pieces.map((piece) => normalizeSampleSlot({ id: idCursor++, text: piece, type: resolvedType }, idCursor));
       return [...prev, ...additions];
     });
   }
@@ -91,7 +70,7 @@ export default function StyleModal({ hasProfile, loading, onTrainProfile, onClos
       const draft = await load(STYLE_MODAL_DRAFT_KEY);
       if (!draft || typeof draft !== "object") return;
       if (Array.isArray(draft.trainSlots) && draft.trainSlots.length) {
-        const normalizedSlots = draft.trainSlots.map((slot, i) => normalizeSampleSlot(slot, i + 1));
+        const normalizedSlots = draft.trainSlots.map((slot, index) => normalizeSampleSlot(slot, index + 1));
         setTrainSlots(normalizedSlots);
       } else if (Array.isArray(draft.trainSlots) && !draft.trainSlots.length) {
         setTrainSlots(initialSlots);
@@ -156,122 +135,206 @@ export default function StyleModal({ hasProfile, loading, onTrainProfile, onClos
   }
 
   return (
-    <div style={S.modalOverlay} onClick={onClose}>
-      <div style={S.modalPanel} onClick={e => e.stopPropagation()}>
-
-        {/* Header */}
-        <div style={S.modalHeader}>
-          <h2 style={S.modalTitle}>{hasProfile ? "Grow Your Writing Profile" : "Onboard Your Writing Profile"}</h2>
-          <button onClick={onClose} style={S.modalClose}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
+    <Modal opened onClose={onClose} centered size="xl" classNames={{ content: "modal-content", body: "panel-grid" }} withCloseButton={false}>
+        <div className="toolbar-row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
+          <h2 style={{ margin: 0 }}>{hasProfile ? "Grow Your Writing Profile" : "Onboard Your Writing Profile"}</h2>
+          <Button
+            variant="light"
+            onPress={onClose}
+            aria-label="Close style modal"
+            tooltip="Close the style pieces modal"
+            iconOnly
+          >
+            <ModalIcon>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M18 6 6 18" />
+                <path d="m6 6 12 12" />
+              </svg>
+            </ModalIcon>
+          </Button>
         </div>
-        <div style={{ marginBottom: 20, color: "#6b5d52", fontSize: 13, lineHeight: 1.6 }}>
+
+        <p style={{ marginTop: 0, marginBottom: 16, fontSize: 13, color: "#655d52" }}>
           Build a style pool by dropping or pasting your writing. Every piece stays editable and can be refined over time.
-        </div>
+        </p>
 
-        <div style={S.fieldLabel}>Drop / Paste Writing</div>
-        <div
-          style={{
-            border: `1px dashed ${dropActive ? "var(--accent)" : "#d4cdc0"}`,
-            borderRadius: 10,
-            background: dropActive ? "#fffbf3" : "#faf7f0",
-            padding: 12,
-            margin: "10px 0 16px",
-            transition: "all 0.18s",
-          }}
-          onDragOver={(e) => { e.preventDefault(); setDropActive(true); }}
-          onDragLeave={() => setDropActive(false)}
-          onDrop={handleDrop}
-        >
-          <textarea
-            value={poolInput}
-            onChange={(e) => setPoolInput(e.target.value)}
-            placeholder="Paste one or more writing snippets. Separate pieces with a blank line."
-            style={{ ...S.textareaField, minHeight: 120 }}
-          />
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={S.sampleTypeLabel}>Classify as</span>
-              <select value={poolType} onChange={(e) => setPoolType(e.target.value)} style={S.sampleTypeSelect}>
-                {WRITING_SAMPLE_TYPES.map((type) => (
-                  <option key={type.value} value={type.value}>{type.label}</option>
-                ))}
-              </select>
+        {health ? (
+          <Card className="app-card style-health-card" radius="lg">
+            <Card.Content className="toolbar-row style-health-strip p-3">
+              <span className="style-health-chip text-mono">
+                {`${sampleCount} samples • ${profileLabel || "Selected"} profile${hasProfile ? "" : " needs onboarding"}`}
+              </span>
+              <span className="text-mono style-health-kicker">Profile health</span>
+              <span className="style-health-score">{health.score}/100</span>
+              <span className="text-mono style-health-meta">
+                coverage {health.typeCoverage}/{WRITING_SAMPLE_TYPES.length}
+              </span>
+              <span className="text-mono style-health-meta">
+                {health.sampleCount || 0} sample{health.sampleCount === 1 ? "" : "s"}
+              </span>
+            </Card.Content>
+          </Card>
+        ) : null}
+
+        <Card className="app-card" radius="lg">
+          <Card.Content
+            className="panel-grid p-3"
+              style={{
+                border: dropActive ? "1px dashed var(--accent, #a56b2f)" : "1px dashed #d6cbb9",
+                borderRadius: 12,
+                background: dropActive ? "var(--accent-soft)" : "rgba(255,255,255,0.72)",
+              }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDropActive(true);
+            }}
+            onDragLeave={() => setDropActive(false)}
+            onDrop={handleDrop}
+          >
+            <label className="text-mono" style={{ fontSize: 11 }}>Drop / Paste Writing</label>
+            <TextArea
+              value={poolInput}
+              onChange={(e) => setPoolInput(e.target.value)}
+              placeholder="Paste writing snippets. Each paste is added as one style piece."
+              style={{ minHeight: 120 }}
+            />
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <div className="toolbar-row">
+                <span className="text-mono" style={{ fontSize: 11 }}>Classify as</span>
+                <NativeSelect
+                  value={poolType}
+                  onChange={(e) => setPoolType(resolveSampleType(e.currentTarget.value))}
+                  className="app-select-wrap"
+                  data={WRITING_SAMPLE_TYPES.map((type) => ({ value: type.value, label: type.label }))}
+                  styles={{ input: { minWidth: 180 } }}
+                />
+              </div>
+              <Button
+                color="primary"
+                onPress={addPastedContent}
+                isDisabled={!poolInput.trim()}
+                aria-label="Add to style pool"
+                tooltip="Add the pasted writing as a new style piece"
+                iconOnly
+              >
+                <ModalIcon>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 5v14" />
+                    <path d="M5 12h14" />
+                  </svg>
+                </ModalIcon>
+              </Button>
             </div>
-            <button
-              onClick={addPastedContent}
-              disabled={!poolInput.trim()}
-              style={{ ...S.submitBtn, ...(!poolInput.trim() ? S.submitBtnDisabled : {}), padding: "8px 14px" }}
-              className="btn"
-            >
-              Add To Pool
-            </button>
-          </div>
-          <div style={{ ...S.ctrlLabel, marginTop: 8 }}>
-            Tip: drop plain text files or paste text blocks. Blank lines split into separate style pieces.
-          </div>
-        </div>
+          </Card.Content>
+        </Card>
 
-        <div style={S.fieldLabel}>Style Pieces ({trainSlots.length})</div>
-        <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+        <h3 className="text-mono" style={{ margin: "14px 0 8px", fontSize: 12 }}>Style Pieces ({trainSlots.length})</h3>
+        <div className="panel-grid">
           {trainSlots.map((slot) => (
-            <div key={slot.id} style={{ border: "1px solid #e5dfd5", borderRadius: 10, background: "#faf7f0", padding: 10 }}>
-              <div style={S.sampleTypeRow}>
-                <label style={S.sampleTypeLabel} htmlFor={`sample-type-${slot.id}`}>Piece {slot.id}</label>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={S.slotStat}>{slot.text.trim().length.toLocaleString()} chars</span>
-                  <button
-                    onClick={() => removeSlot(slot.id)}
-                    disabled={trainSlots.length <= 1}
-                    style={{ ...S.ghostBtn, padding: "4px 9px", fontSize: 11 }}
-                    className="btn"
-                  >
-                    Remove
-                  </button>
+            <Card key={slot.id} className="app-card" radius="lg">
+              <Card.Content className="panel-grid p-3">
+                <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+                  <label className="text-mono" htmlFor={`sample-type-${slot.id}`} style={{ fontSize: 11 }}>Piece {slot.id}</label>
+                  <div className="toolbar-row">
+                    <span className="text-mono" style={{ fontSize: 11 }}>{slot.text.trim().length.toLocaleString()} chars</span>
+                    <Button
+                      variant="bordered"
+                      size="sm"
+                      onPress={() => removeSlot(slot.id)}
+                      isDisabled={trainSlots.length <= 1}
+                      aria-label={`Remove style piece ${slot.id}`}
+                      tooltip={`Remove style piece ${slot.id}`}
+                      iconOnly
+                    >
+                      <ModalIcon>
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M3 6h18" />
+                          <path d="M8 6V4h8v2" />
+                          <path d="m19 6-1 14H6L5 6" />
+                          <path d="M10 11v6" />
+                          <path d="M14 11v6" />
+                        </svg>
+                      </ModalIcon>
+                    </Button>
+                  </div>
                 </div>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                <span style={S.sampleTypeLabel}>Sample form</span>
-                <select
-                  id={`sample-type-${slot.id}`}
-                  value={slot.type}
-                  onChange={e => setTrainSlots(p => p.map(s => s.id === slot.id ? { ...s, type: e.target.value } : s))}
-                  style={S.sampleTypeSelect}
-                >
-                  {WRITING_SAMPLE_TYPES.map(type => (
-                    <option key={type.value} value={type.value}>{type.label}</option>
-                  ))}
-                </select>
-              </div>
-              <textarea
-                value={slot.text}
-                onChange={e => setTrainSlots(p => p.map(s => s.id === slot.id ? { ...s, text: e.target.value } : s))}
-                placeholder={`Paste ${WRITING_SAMPLE_TYPES.find(t => t.value === slot.type)?.label.toLowerCase() || "writing"} here. Aim for 150+ chars.`}
-                style={{ ...S.textareaField, minHeight: 130 }}
-              />
-            </div>
+
+                <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+                  <span className="text-mono" style={{ fontSize: 11 }}>Sample form</span>
+                  <NativeSelect
+                    id={`sample-type-${slot.id}`}
+                    value={slot.type}
+                    onChange={(e) => {
+                      const nextType = resolveSampleType(e.currentTarget.value);
+                      setTrainSlots((prev) => prev.map((sample) => sample.id === slot.id ? { ...sample, type: nextType } : sample));
+                    }}
+                    className="app-select-wrap"
+                    data={WRITING_SAMPLE_TYPES.map((type) => ({ value: type.value, label: type.label }))}
+                    styles={{ input: { minWidth: 180 } }}
+                  />
+                </div>
+
+                <TextArea
+                  value={slot.text}
+                  onChange={(e) => setTrainSlots((prev) => prev.map((sample) => sample.id === slot.id ? { ...sample, text: e.target.value } : sample))}
+                  placeholder={`Paste ${getSampleTypeLabel(slot.type).toLowerCase()} here. Aim for 150+ chars.`}
+                  style={{ minHeight: 130 }}
+                />
+              </Card.Content>
+            </Card>
           ))}
         </div>
 
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 16, gap: 8, flexWrap: "wrap" }}>
-          <span style={S.slotStat}>{filledSlots.length} sample{filledSlots.length !== 1 ? "s" : ""} ready · {totalChars.toLocaleString()} chars</span>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <button onClick={addBlankPiece} style={S.addSlotBtn} className="add-slot-btn">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-              Blank Piece
-            </button>
-            <button
-              onClick={handleSubmit}
-              disabled={loading || !filledSlots.length}
-              style={{ ...S.submitBtn, ...(loading || !filledSlots.length ? S.submitBtnDisabled : {}) }}
-              className="btn"
+        <div className="toolbar-row" style={{ justifyContent: "space-between", marginTop: 14 }}>
+          <span className="text-mono" style={{ fontSize: 11 }}>
+            {filledSlots.length} sample{filledSlots.length !== 1 ? "s" : ""} ready · {totalChars.toLocaleString()} chars
+          </span>
+          <div className="toolbar-row">
+            <Button
+              variant="bordered"
+              onPress={addBlankPiece}
+              aria-label="Add blank style piece"
+              tooltip="Create an empty style piece you can fill in manually"
+              iconOnly
             >
-              {loading ? "Processing…" : hasProfile ? "Merge Into Profile" : "Create Profile"}
-            </button>
+              <ModalIcon>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="4" y="4" width="16" height="16" rx="2" />
+                  <path d="M12 8v8" />
+                  <path d="M8 12h8" />
+                </svg>
+              </ModalIcon>
+            </Button>
+            <Button
+              color="primary"
+              onPress={handleSubmit}
+              isDisabled={loading || !filledSlots.length}
+              aria-label={loading ? "Processing style profile" : hasProfile ? "Merge into profile" : "Create profile"}
+              tooltip={loading ? "Training in progress" : hasProfile ? "Merge these style pieces into the current profile" : "Create a new writing profile from these style pieces"}
+              iconOnly
+            >
+              <ModalIcon>
+                {loading ? (
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 12a9 9 0 1 1-9-9" />
+                  </svg>
+                ) : hasProfile ? (
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="m8 12 4 4 8-8" />
+                    <path d="M16 8h4v4" />
+                    <path d="M12 16H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                  </svg>
+                ) : (
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="m22 11-7-7-10 10" />
+                    <path d="M16 5h6v6" />
+                    <path d="M12 20H5a1 1 0 0 1-1-1v-7" />
+                  </svg>
+                )}
+              </ModalIcon>
+            </Button>
           </div>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

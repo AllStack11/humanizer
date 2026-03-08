@@ -1,5 +1,65 @@
+# Environment and secrets
 .env
-data/writer-style-backup.json
-node_modules
-dist
-src-tauri/target
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.der
+*.cer
+*.jks
+secrets/
+
+# Node / JS
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.npm/
+.pnpm-store/
+.yarn/
+
+# Build artifacts
+dist/
+build/
+coverage/
+.cache/
+.parcel-cache/
+.vite/
+*.tsbuildinfo
+
+# Runtime data
+data/
+tmp/
+temp/
+logs/
+*.log
+src-tauri/.voice-humanizer/
+
+# Rust / Cargo / Tauri
+src-tauri/target/
+target/
+**/*.rs.bk
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*.tmp
+
+# Python envs
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Test snapshots and misc artifacts
+*.snap
+*.seed

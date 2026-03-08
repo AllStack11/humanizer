@@ -1,5 +1,38 @@
 import { isTauriRuntime, tauriInvoke } from './tauri.js';
 
+const STORAGE_PREFIX = "vh";
+let storageScopePromise = null;
+const LEGACY_KEYS = [
+  "styles-v3",
+  "cliches-v3",
+  "cliches-ts-v3",
+  "writer-editor-draft-v1",
+  "output-history-v2",
+  "style-modal-draft-v1",
+  "runtime-api-config-v1",
+  "selected-model-v1",
+  "custom-model-options-v1",
+];
+
+async function getStorageScope() {
+  if (storageScopePromise) return storageScopePromise;
+  storageScopePromise = (async () => {
+    if (!isTauriRuntime()) return "web";
+    try {
+      const channel = await tauriInvoke("get_runtime_channel");
+      if (channel === "debug" || channel === "release") return channel;
+    } catch {}
+    return "default";
+  })();
+  return storageScopePromise;
+}
+
+async function resolveStorageKey(key) {
+  const scope = await getStorageScope();
+  if (scope === "default") return key;
+  return `${STORAGE_PREFIX}:${scope}:${key}`;
+}
+
 function normalizeRuntimeConfig(runtime = {}) {
   if (!runtime || typeof runtime !== "object") return {};
   const apiUrl = typeof runtime.apiUrl === "string" ? runtime.apiUrl.trim() : "";
@@ -11,11 +44,20 @@ function normalizeRuntimeConfig(runtime = {}) {
 }
 
 export async function load(key) {
-  try { const r = localStorage.getItem(key); return r ? JSON.parse(r) : null; } catch { return null; }
+  try {
+    const scoped = await resolveStorageKey(key);
+    const r = localStorage.getItem(scoped);
+    return r ? JSON.parse(r) : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function save(key, val) {
-  try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
+  try {
+    const scoped = await resolveStorageKey(key);
+    localStorage.setItem(scoped, JSON.stringify(val));
+  } catch {}
 }
 
 export async function loadStylesBackup() {
@@ -89,4 +131,23 @@ export async function storeApiKey(key, runtime) {
 export async function clearStoredApiKey(runtime) {
   if (!isTauriRuntime()) return { ok: true };
   return tauriInvoke("clear_api_key", { runtime: normalizeRuntimeConfig(runtime) });
+}
+
+export async function resetAppData(runtime) {
+  try {
+    const scope = await getStorageScope();
+    const allKeys = Object.keys(localStorage);
+    const scopedPrefix = `${STORAGE_PREFIX}:${scope}:`;
+    for (const key of allKeys) {
+      if (key.startsWith(`${STORAGE_PREFIX}:`) || key.startsWith(scopedPrefix)) {
+        localStorage.removeItem(key);
+      }
+    }
+    for (const key of LEGACY_KEYS) {
+      localStorage.removeItem(key);
+    }
+  } catch {}
+
+  if (!isTauriRuntime()) return { ok: true };
+  return tauriInvoke("clear_app_data", { runtime: normalizeRuntimeConfig(runtime) });
 }

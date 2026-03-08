@@ -63,31 +63,15 @@ export function buildClicheRanges(text, cliches) {
   return deduped;
 }
 
-export function buildMirrorSegments(text, errors, clicheRanges = []) {
+export function buildMirrorSegments(text, clicheRanges = []) {
   if (!text) return [{ text, kind: "plain" }];
   const ranges = [];
-
-  for (const err of errors || []) {
-    const word = err.wrong;
-    let searchFrom = 0;
-    while (word && searchFrom < text.length) {
-      const idx = text.indexOf(word, searchFrom);
-      if (idx === -1) break;
-      const before = idx > 0 ? text[idx - 1] : " ";
-      const after = idx + word.length < text.length ? text[idx + word.length] : " ";
-      const isWord = /[\s,.:;!?'"()\[\]{}]/.test(before) && /[\s,.:;!?'"()\[\]{}]/.test(after);
-      if (isWord || idx === 0 || idx + word.length === text.length) {
-        ranges.push({ start: idx, end: idx + word.length, kind: "error" });
-      }
-      searchFrom = idx + 1;
-    }
-  }
 
   for (const range of clicheRanges) {
     ranges.push({ start: range.start, end: range.end, kind: "cliche" });
   }
 
-  ranges.sort((a, b) => a.start - b.start || (a.kind === "error" ? -1 : 1));
+  ranges.sort((a, b) => a.start - b.start);
   const segments = [];
   let pos = 0;
   for (const range of ranges) {

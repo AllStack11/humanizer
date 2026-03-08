@@ -6,18 +6,30 @@
   "scripts": {
     "dev": "npm run tauri:dev",
     "build": "npm run tauri:build",
+    "dev:web": "vite --host 127.0.0.1 --port 1420 --strictPort",
     "build:web": "vite build",
-    "tauri:dev": "node scripts/tauri-runner.mjs dev --no-dev-server",
+    "tauri:dev": "node scripts/tauri-runner.mjs dev",
     "tauri:build": "node scripts/tauri-runner.mjs build",
     "ci": "npm run test && npm run build:web",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:openrouter": "node scripts/openrouter-integration.mjs"
+    "test:openrouter": "node scripts/openrouter-integration.mjs",
+    "version:sync": "node scripts/sync-version.mjs",
+    "version:bump:patch": "npm version patch --no-git-tag-version && npm run version:sync",
+    "version:bump:minor": "npm version minor --no-git-tag-version && npm run version:sync",
+    "version:bump:major": "npm version major --no-git-tag-version && npm run version:sync"
   },
   "dependencies": {
+    "@mantine/core": "^8.3.16",
+    "@mantine/hooks": "^8.3.16",
     "@tauri-apps/api": "^2.10.1",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "@tiptap/extension-placeholder": "^3.20.1",
+    "@tiptap/pm": "^3.20.1",
+    "@tiptap/react": "^3.20.1",
+    "@tiptap/starter-kit": "^3.20.1",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "tailwindcss": "^4.2.1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.10.1",

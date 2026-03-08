@@ -16,6 +16,14 @@ const DEFAULT_SECRET_DIR_NAME: &str = ".voice-humanizer";
 const API_KEY_FILE_NAME: &str = "openrouter_api_key";
 const DEFAULT_DEBUG_LOG_FILE_NAME: &str = "openrouter-debug.log";
 
+fn runtime_channel() -> &'static str {
+  if cfg!(debug_assertions) {
+    "debug"
+  } else {
+    "release"
+  }
+}
+
 #[derive(Default)]
 struct AppState {
   logs: Mutex<Vec<RequestLog>>,
@@ -411,7 +419,40 @@ fn app_data_backup_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     .path()
     .app_data_dir()
     .map_err(|e| format!("Failed to resolve app data dir: {e}"))?;
-  Ok(dir.join("writer-style-backup.json"))
+  Ok(dir.join(format!("writer-style-backup.{}.json", runtime_channel())))
+}
+
+fn app_data_backup_cleanup_paths(app: &tauri::AppHandle) -> Result<Vec<PathBuf>, String> {
+  let dir = app
+    .path()
+    .app_data_dir()
+    .map_err(|e| format!("Failed to resolve app data dir: {e}"))?;
+  let mut paths = Vec::new();
+  let base_names = vec![
+    "writer-style-backup.json".to_string(),
+    "writer-style-backup.debug.json".to_string(),
+    "writer-style-backup.release.json".to_string(),
+  ];
+  for name in base_names {
+    let primary = dir.join(&name);
+    paths.push(primary.clone());
+    let primary_str = primary.to_string_lossy();
+    paths.push(PathBuf::from(primary_str.replace(".json", ".1.json")));
+    paths.push(PathBuf::from(primary_str.replace(".json", ".2.json")));
+  }
+  Ok(paths)
+}
+
+fn remove_if_exists(path: &Path) -> Result<(), String> {
+  if !path.exists() {
+    return Ok(());
+  }
+  fs::remove_file(path).map_err(|e| format!("Failed removing {}: {e}", path.display()))
+}
+
+#[tauri::command]
+fn get_runtime_channel() -> String {
+  runtime_channel().to_string()
 }
 
 fn rotate_backups(primary_path: &Path) -> Result<(), String> {
@@ -1046,6 +1087,30 @@ fn clear_request_logs(state: State<'_, AppState>) -> OkResponse {
 }
 
 #[tauri::command]
+fn clear_app_data(
+  app: tauri::AppHandle,
+  runtime: Option<RuntimeConfig>,
+  state: State<'_, AppState>,
+) -> Result<OkResponse, String> {
+  {
+    let mut logs = state.logs.lock().expect("log mutex poisoned");
+    logs.clear();
+  }
+
+  let api_key_path = resolve_api_key_file_path(Some(&app), runtime.as_ref())?;
+  clear_api_key_file(&api_key_path)?;
+
+  for path in app_data_backup_cleanup_paths(&app)? {
+    remove_if_exists(&path)?;
+  }
+
+  let debug_log_path = resolve_debug_log_path();
+  let _ = remove_if_exists(&debug_log_path);
+
+  Ok(OkResponse { ok: true })
+}
+
+#[tauri::command]
 fn add_diagnostic_log(payload: DiagnosticLogPayload, state: State<'_, AppState>) -> Result<OkResponse, String> {
   let route = payload.route.trim().to_string();
   if route.is_empty() {
@@ -1160,8 +1225,10 @@ pub fn run() {
       openrouter_chat_stream,
       get_styles_backup,
       save_styles_backup,
+      get_runtime_channel,
       get_request_logs,
       clear_request_logs,
+      clear_app_data,
       add_diagnostic_log,
     ])
     .run(tauri::generate_context!())

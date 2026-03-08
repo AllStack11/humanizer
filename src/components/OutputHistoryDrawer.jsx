@@ -1,0 +1,203 @@
+import { NativeSelect } from "@mantine/core";
+import { Button, Card } from "./AppUI.jsx";
+
+function formatTimestamp(value) {
+  try {
+    return new Date(value).toLocaleString();
+  } catch {
+    return "";
+  }
+}
+
+export default function OutputHistoryDrawer({
+  entries,
+  selectedEntry,
+  query,
+  onQueryChange,
+  filters,
+  onFilterChange,
+  profileOptions,
+  modelOptions,
+  onSelectEntry,
+  onCopyEntry,
+  onToggleSaved,
+  onRenameEntry,
+  onDeleteEntry,
+}) {
+  return (
+    <div className="panel-grid output-history-layout">
+      <Card className="app-card">
+        <Card.Content className="panel-grid p-3">
+          <div className="panel-title">Search</div>
+          <input
+            className="output-history-search"
+            aria-label="History search"
+            value={query}
+            onChange={(event) => onQueryChange(event.target.value)}
+            placeholder="Search outputs, source text, or titles"
+          />
+          <div className="output-history-filters">
+            <NativeSelect
+              aria-label="History profile filter"
+              value={filters.profileId}
+              onChange={(event) => onFilterChange({ profileId: event.target.value })}
+              data={[{ value: "", label: "All profiles" }, ...profileOptions]}
+              className="app-select-wrap"
+            />
+            <NativeSelect
+              aria-label="History mode filter"
+              value={filters.mode}
+              onChange={(event) => onFilterChange({ mode: event.target.value })}
+              data={[
+                { value: "", label: "All modes" },
+                { value: "humanize", label: "Humanize" },
+                { value: "elaborate", label: "Elaborate" },
+              ]}
+              className="app-select-wrap"
+            />
+            <NativeSelect
+              aria-label="History model filter"
+              value={filters.model}
+              onChange={(event) => onFilterChange({ model: event.target.value })}
+              data={[{ value: "", label: "All models" }, ...modelOptions]}
+              className="app-select-wrap"
+            />
+            <NativeSelect
+              aria-label="History saved filter"
+              value={filters.savedOnly ? "saved" : ""}
+              onChange={(event) => onFilterChange({ savedOnly: event.target.value === "saved" })}
+              data={[
+                { value: "", label: "All entries" },
+                { value: "saved", label: "Saved only" },
+              ]}
+              className="app-select-wrap"
+            />
+          </div>
+        </Card.Content>
+      </Card>
+
+      <div className="output-history-grid">
+        <Card className="app-card">
+          <Card.Content className="panel-grid p-3">
+            <div className="panel-title">All Responses</div>
+            <div className="output-history-list" role="list" aria-label="Global output history">
+              {entries.length ? entries.map((entry) => (
+                <button
+                  key={entry.id}
+                  type="button"
+                  className={`output-history-item${selectedEntry?.id === entry.id ? " is-selected" : ""}`}
+                  onClick={() => onSelectEntry(entry.id)}
+                  aria-pressed={selectedEntry?.id === entry.id}
+                >
+                  <span className="output-history-item-title">{entry.title}</span>
+                  <span className="text-mono output-history-item-meta">
+                    {entry.profileId || "unknown"} · {entry.mode} · {entry.model || "Unknown model"}
+                  </span>
+                  <span className="text-mono output-history-item-meta">
+                    {formatTimestamp(entry.createdAt)} · {entry.isSaved ? "Saved" : "Recent"}
+                  </span>
+                </button>
+              )) : (
+                <div className="output-history-empty">No history entries match the current filters.</div>
+              )}
+            </div>
+          </Card.Content>
+        </Card>
+
+        <Card className="app-card">
+          <Card.Content className="panel-grid p-3">
+            <div className="toolbar-row output-history-detail-head">
+              <div className="panel-title">Response Detail</div>
+              {selectedEntry ? (
+                <div className="toolbar-row">
+                  <Button
+                    variant="bordered"
+                    size="sm"
+                    onPress={() => onCopyEntry(selectedEntry)}
+                    aria-label="Copy selected history entry"
+                    tooltip="Copy selected history entry"
+                    iconOnly
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="9" y="9" width="13" height="13" rx="2" />
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                    </svg>
+                  </Button>
+                  <Button
+                    variant="bordered"
+                    size="sm"
+                    onPress={() => onToggleSaved(selectedEntry)}
+                    aria-label={selectedEntry.isSaved ? "Unsave selected history entry" : "Save selected history entry"}
+                    tooltip={selectedEntry.isSaved ? "Remove selected entry from saved items" : "Save selected history entry"}
+                    iconOnly
+                  >
+                    {selectedEntry.isSaved ? (
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+                        <path d="m9 10 3 3 3-3" />
+                      </svg>
+                    ) : (
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+                      </svg>
+                    )}
+                  </Button>
+                  <Button
+                    variant="bordered"
+                    size="sm"
+                    onPress={() => onRenameEntry(selectedEntry)}
+                    aria-label="Rename selected history entry"
+                    tooltip="Rename selected history entry"
+                    iconOnly
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 20h9" />
+                      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+                    </svg>
+                  </Button>
+                  <Button
+                    color="danger"
+                    variant="bordered"
+                    size="sm"
+                    onPress={() => onDeleteEntry(selectedEntry)}
+                    aria-label="Delete selected history entry"
+                    tooltip="Delete selected history entry"
+                    iconOnly
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M3 6h18" />
+                      <path d="M8 6V4h8v2" />
+                      <path d="m19 6-1 14H6L5 6" />
+                    </svg>
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+
+            {selectedEntry ? (
+              <>
+                <div className="output-history-detail-metadata">
+                  <span className="text-mono">Profile: {selectedEntry.profileId}</span>
+                  <span className="text-mono">Mode: {selectedEntry.mode}</span>
+                  <span className="text-mono">Model: {selectedEntry.model || "Unknown model"}</span>
+                  <span className="text-mono">Created: {formatTimestamp(selectedEntry.createdAt)}</span>
+                  <span className="text-mono">Status: {selectedEntry.status}</span>
+                </div>
+                <div className="surface-box output-history-detail-block">
+                  <div className="text-mono output-history-detail-label">Source</div>
+                  <div className="output-history-detail-text">{selectedEntry.sourceText || "No source text captured."}</div>
+                </div>
+                <div className="surface-box output-history-detail-block">
+                  <div className="text-mono output-history-detail-label">Output</div>
+                  <div className="output-history-detail-text">{selectedEntry.currentOutputText || "No output captured."}</div>
+                </div>
+              </>
+            ) : (
+              <div className="output-history-empty">Select a response to inspect its details.</div>
+            )}
+          </Card.Content>
+        </Card>
+      </div>
+    </div>
+  );
+}
