@@ -26,6 +26,8 @@ Last updated: 2026-03-08
 
 - Add richer profile controls (more granular tone and domain presets).
 - Add user-configurable output presets (create, edit, save, and reuse custom presets).
+- Add cross-device writer profile sync for personal use (Mac, Windows PC, and mobile web), including profile read/update from any signed-in device.
+- Add account-based cloud profile storage (auth + encrypted-at-rest profile records + sync conflict handling).
 - Add user-configurable profile save location (choose where profile data is stored/backed up).
 - Add optional export/import tooling for local user data portability.
 - Add in-place partial regeneration: highlight selected output text and regenerate only that span.

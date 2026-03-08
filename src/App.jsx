@@ -34,6 +34,17 @@ import {
   deleteHistoryEntriesForProfile,
 } from './lib/output-history.js';
 import { STYLE_ANALYZE_SYS, STYLE_MERGE_SYS, HUMANIZE_SYS, ELABORATE_SYS } from './lib/prompts.js';
+import {
+  dedupeSampleEntries,
+  getErrorMessage,
+  isMissingApiKeyError,
+  parseJsonFromModelOutput,
+} from "./features/app/helpers.js";
+import {
+  buildHumanizeUserPrompt,
+  outputLooksLikeAnsweredPrompt,
+} from "./features/humanize/promptGuards.js";
+import { useProcessLog } from "./features/process/useProcessLog.js";
 
 // Utils
 import {
@@ -59,219 +70,9 @@ import OutputHistoryDrawer from './components/OutputHistoryDrawer.jsx';
 import { Drawer } from "@mantine/core";
 import { Button } from "./components/AppUI.jsx";
 
-const CONVERSATIONAL_OPENERS = [
-  "hi",
-  "hey",
-  "hello",
-  "yo",
-  "good morning",
-  "good afternoon",
-  "good evening",
-  "how are you",
-  "how's it going",
-  "hows it going",
-  "what's up",
-  "whats up",
-  "can you",
-  "could you",
-  "would you",
-  "will you",
-  "do you",
-  "did you",
-  "are you",
-  "have you",
-  "where are",
-  "when are",
-  "why are",
-  "what are",
-];
-
-function normalizeHumanizeText(text) {
-  return String(text || "").trim().replace(/\s+/g, " ");
-}
-
-export function analyzeHumanizeInput(text) {
-  const normalized = normalizeHumanizeText(text);
-  const lower = normalized.toLowerCase();
-  const wordCount = countWords(normalized);
-  const greetingLike = /^(hi|hey|hello|yo|good morning|good afternoon|good evening)\b/i.test(normalized);
-  const questionLike = /\?\s*$/.test(normalized)
-    || CONVERSATIONAL_OPENERS.some((prefix) => lower.startsWith(prefix))
-    || /\bhow are you\b/i.test(normalized);
-  const shortChatLike = wordCount > 0 && wordCount <= 14;
-  const conversational = shortChatLike && (greetingLike || questionLike || /\byou\b/i.test(normalized));
-
-  return {
-    normalized,
-    wordCount,
-    greetingLike,
-    questionLike,
-    shortChatLike,
-    conversational,
-  };
-}
-
-export function buildHumanizeUserPrompt(text, { strict = false } = {}) {
-  const analysis = analyzeHumanizeInput(text);
-  const guardrails = [
-    "Rewrite the source text below in the target voice.",
-    "Transform the source text itself. Do not answer it, continue it, or switch to the other speaker.",
-  ];
-
-  if (analysis.questionLike) {
-    guardrails.push("Keep the result as a question or check-in rather than turning it into an answer.");
-  }
-  if (analysis.greetingLike) {
-    guardrails.push("Keep the greeting intent. Do not reply to the greeting.");
-  }
-  if (analysis.shortChatLike) {
-    guardrails.push("Stay close to the original scope and length unless a tiny expansion is needed for natural phrasing.");
-  }
-  if (strict) {
-    guardrails.push("Your previous attempt drifted into a response. Rewrite the source itself this time.");
-  }
-
-  return `${guardrails.join("\n")}\n\n<source_text>\n${String(text || "").trim()}\n</source_text>`;
-}
-
-export function outputLooksLikeAnsweredPrompt(sourceText, outputText) {
-  const source = analyzeHumanizeInput(sourceText);
-  if (!source.conversational) return false;
-
-  const output = normalizeHumanizeText(outputText);
-  if (!output) return false;
-
-  const outputWordCount = countWords(output);
-  let suspicion = 0;
-
-  if (source.questionLike && !/\?\s*$/.test(output)) suspicion += 1;
-  if (outputWordCount >= Math.max(source.wordCount * 3, source.wordCount + 12)) suspicion += 1;
-  if (/\b(i am|i'm|im|i’ve|i've|i feel|i was|i've been|i have been)\b/i.test(output)) suspicion += 1;
-  if (/\bdoing (pretty )?(good|well|great|okay|ok|fine)\b/i.test(output)) suspicion += 1;
-  if (/\bthanks for asking\b/i.test(output)) suspicion += 1;
-  if (/\bhope (you are|you're|ur) (doing )?(well|good)\b/i.test(output)) suspicion += 1;
-
-  return suspicion >= 2;
-}
-
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
   const RUNTIME_API_CONFIG_KEY = "runtime-api-config-v1";
-
-  function getErrorMessage(error, fallback = "Unexpected error.") {
-    if (error instanceof Error && error.message) return error.message;
-    if (typeof error === "string" && error.trim()) return error;
-    if (error && typeof error === "object") {
-      const message = error.message || error.error || error.reason;
-      if (typeof message === "string" && message.trim()) return message;
-      try { return JSON.stringify(error); } catch {}
-    }
-    return fallback;
-  }
-
-  function isMissingApiKeyError(message) {
-    return typeof message === "string" && /api key not found/i.test(message);
-  }
-
-  function pushProcessStep(message, level = "info", detail = "") {
-    setProcessSteps((prev) => [
-      ...prev.slice(-11),
-      {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        message,
-        level,
-        detail,
-        timestamp: new Date().toISOString(),
-      },
-    ]);
-  }
-
-  function startProcessLog(message, detail = "") {
-    setProcessSummary(message);
-    setProcessError("");
-    setProcessNeedsApiKey(false);
-    setProcessSteps([
-      {
-        id: `${Date.now()}-start`,
-        message,
-        level: "info",
-        detail,
-        timestamp: new Date().toISOString(),
-      },
-    ]);
-  }
-
-  function classifyRequestIssue(message) {
-    const normalized = String(message || "").toLowerCase();
-
-    if (!normalized) {
-      return {
-        summary: "Unknown request failure.",
-        detail: "",
-      };
-    }
-
-    if (normalized.includes("api key")) {
-      return {
-        summary: "Authentication failed.",
-        detail: "OpenRouter API key is missing, invalid, or unreadable.",
-      };
-    }
-
-    if (normalized.includes("desktop runtime required") || normalized.includes("tauri runtime")) {
-      return {
-        summary: "Desktop runtime unavailable.",
-        detail: "This request can only run inside the desktop app.",
-      };
-    }
-
-    if (normalized.includes("failed to reach openrouter")) {
-      return {
-        summary: "Network request failed.",
-        detail: "The app could not reach the model provider.",
-      };
-    }
-
-    if (normalized.includes("http ")) {
-      return {
-        summary: "Provider rejected the request.",
-        detail: "The model endpoint returned an HTTP error.",
-      };
-    }
-
-    if (normalized.includes("parse")) {
-      return {
-        summary: "Provider response could not be parsed.",
-        detail: "The app received malformed or unexpected model output.",
-      };
-    }
-
-    if (normalized.includes("empty response")) {
-      return {
-        summary: "Model returned no output.",
-        detail: "The request completed but produced no usable text.",
-      };
-    }
-
-    return {
-      summary: "Request failed.",
-      detail: message,
-    };
-  }
-
-  function logRequestFailure(prefix, message) {
-    const issue = classifyRequestIssue(message);
-    pushProcessStep(`${prefix} ${issue.summary}`, "error", issue.detail || message);
-    setProcessSummary(`${prefix} ${issue.summary}`);
-    setProcessError(message);
-    setProcessNeedsApiKey(String(message || "").toLowerCase().includes("api key"));
-  }
-
-  function completeProcess(summary) {
-    setProcessSummary(summary);
-    setProcessError("");
-    setProcessNeedsApiKey(false);
-  }
 
   async function ensureApiKeyReady(actionLabel) {
     if (!isTauriRuntime()) return true;
@@ -353,10 +154,20 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus]   = useState("");
   const [error, setError]     = useState("");
-  const [processSteps, setProcessSteps] = useState([]);
-  const [processSummary, setProcessSummary] = useState("");
-  const [processError, setProcessError] = useState("");
-  const [processNeedsApiKey, setProcessNeedsApiKey] = useState(false);
+  const {
+    processSteps,
+    processSummary,
+    processError,
+    processNeedsApiKey,
+    setProcessSummary,
+    setProcessError,
+    setProcessNeedsApiKey,
+    pushProcessStep,
+    startProcessLog,
+    logRequestFailure,
+    completeProcess,
+    resetProcessLog,
+  } = useProcessLog();
   const [apiKeyModalOpen, setApiKeyModalOpen] = useState(false);
   const [apiKeyRequired, setApiKeyRequired] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState("");
@@ -876,10 +687,7 @@ export default function App() {
       setBackupStatus("idle");
       setBackupLastSavedAt(null);
       setBackupError("");
-      setProcessSteps([]);
-      setProcessSummary("");
-      setProcessError("");
-      setProcessNeedsApiKey(false);
+      resetProcessLog();
       setStatus("All app data reset.");
       setApiKeyInput("");
       setApiUrlInput("");
@@ -918,30 +726,6 @@ export default function App() {
       }
     }
     setClicheFetching(false);
-  }
-
-  function parseJsonFromModelOutput(raw) {
-    const cleaned = String(raw || "").replace(/```json|```/gi, "").trim();
-    return JSON.parse(cleaned);
-  }
-
-  function dedupeSampleEntries(entries) {
-    const seen = new Set();
-    const deduped = [];
-    for (const rawEntry of entries || []) {
-      const normalized = normalizeSampleSlot(rawEntry, deduped.length + 1);
-      const text = normalized.text.trim();
-      if (!text) continue;
-      const key = `${normalized.type}::${text.toLowerCase().replace(/\s+/g, " ")}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      deduped.push({
-        ...normalized,
-        id: deduped.length + 1,
-        text,
-      });
-    }
-    return deduped;
   }
 
   // ── Profile onboarding / evolution ──
@@ -1679,3 +1463,8 @@ export {
 } from './utils/index.js';
 
 export { extractStreamTextChunk } from './lib/api.js';
+export {
+  analyzeHumanizeInput,
+  buildHumanizeUserPrompt,
+  outputLooksLikeAnsweredPrompt,
+} from "./features/humanize/promptGuards.js";
