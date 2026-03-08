@@ -66,6 +66,7 @@ import StyleModal from './components/StyleModal.jsx';
 import ApiKeyModal from './components/ApiKeyModal.jsx';
 import ManagementPanel from './components/ManagementPanel.jsx';
 import ProcessLogPanel from './components/ProcessLogPanel.jsx';
+import MergeProgressModal from './components/MergeProgressModal.jsx';
 import OutputHistoryDrawer from './components/OutputHistoryDrawer.jsx';
 import { Drawer } from "@mantine/core";
 import { Button } from "./components/AppUI.jsx";
@@ -73,6 +74,7 @@ import { Button } from "./components/AppUI.jsx";
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
   const RUNTIME_API_CONFIG_KEY = "runtime-api-config-v1";
+  const PROFILE_STEP_DELAY_MS = 650;
 
   async function ensureApiKeyReady(actionLabel) {
     if (!isTauriRuntime()) return true;
@@ -152,6 +154,14 @@ export default function App() {
 
   // Async feedback
   const [loading, setLoading] = useState(false);
+  const [requestLoading, setRequestLoading] = useState(false);
+  const [profileMergeLoading, setProfileMergeLoading] = useState(false);
+  const [mergeProgressOpen, setMergeProgressOpen] = useState(false);
+  const [mergeProgressValue, setMergeProgressValue] = useState(0);
+  const [mergeProgressLabel, setMergeProgressLabel] = useState("");
+  const [mergeProgressTitle, setMergeProgressTitle] = useState("Updating profile");
+  const [mergeProgressSteps, setMergeProgressSteps] = useState([]);
+  const mergeStepIdRef = useRef(0);
   const [status, setStatus]   = useState("");
   const [error, setError]     = useState("");
   const {
@@ -204,6 +214,37 @@ export default function App() {
       .catch(() => {
         setError("Failed to copy text.");
       });
+  }
+
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function clearMergeProgress() {
+    setMergeProgressValue(0);
+    setMergeProgressLabel("");
+    setMergeProgressSteps([]);
+  }
+
+  async function pushMergeProgressStep(message, progressValue, { level = "info", detail = "", delay = true } = {}) {
+    const timestamp = new Date().toISOString();
+    mergeStepIdRef.current += 1;
+    setMergeProgressLabel(message);
+    if (typeof progressValue === "number") {
+      const normalized = Math.max(0, Math.min(100, progressValue));
+      setMergeProgressValue(normalized);
+    }
+    setMergeProgressSteps((prev) => [
+      ...prev,
+      {
+        id: `merge-step-${mergeStepIdRef.current}`,
+        message,
+        detail,
+        level,
+        timestamp,
+      },
+    ]);
+    if (delay) await sleep(PROFILE_STEP_DELAY_MS);
   }
 
   function buildSessionSeed(sourceText = inputText, currentMode = mode, profileId = activeProfileId) {
@@ -737,17 +778,24 @@ export default function App() {
     const selectedProfile = PROFILE_OPTIONS.find((profile) => profile.id === activeProfileId);
     const profileName = selectedProfile?.label || "Custom";
     setError("");
+    setMergeProgressTitle(existing ? `Merging ${profileName} profile` : `Analyzing ${profileName} profile`);
+    clearMergeProgress();
+    setMergeProgressOpen(true);
+    setProfileMergeLoading(true);
     setLoading(true);
     setStatus(existing ? `Merging new samples into ${profileName} profile…` : `Analyzing ${profileName} profile…`);
     startProcessLog(existing ? `Starting ${profileName} profile merge.` : `Starting ${profileName} profile analysis.`, `${filled.length} writing sample${filled.length === 1 ? "" : "s"} queued`);
 
     try {
+      await pushMergeProgressStep("Queued writing samples for profile processing.", 8, { delay: false });
+      await pushMergeProgressStep("Formatting writing samples for profile analysis.", 20);
       pushProcessStep("Formatting writing samples for analysis.");
       const formatted = filled.map((sample, i) => formatSampleForPrompt(sample, i)).join("\n\n");
       const baseUserPrompt = existing
         ? `Existing profile:\n${JSON.stringify(existing.profile || {})}\n\nNew samples:\n${formatted}`
         : `Analyze:\n\n${formatted}`;
       const baseSystemPrompt = existing ? STYLE_MERGE_SYS : STYLE_ANALYZE_SYS;
+      await pushMergeProgressStep("Building model prompt with current profile context.", 34);
       const attempts = [
         {
           maxTokens: existing ? 3200 : 2400,
@@ -765,14 +813,22 @@ export default function App() {
       let lastParseError = null;
       for (let attempt = 0; attempt < attempts.length; attempt += 1) {
         const plan = attempts[attempt];
+        const attemptLabel = `Attempt ${attempt + 1}/${attempts.length} via ${selectedModel}`;
+        await pushMergeProgressStep("Sending merge request to model.", 45 + (attempt * 16), { detail: attemptLabel });
         pushProcessStep("Sending profile request to model.", "info", `Attempt ${attempt + 1} via ${selectedModel}`);
         const raw = await llm(plan.systemPrompt, plan.userPrompt, plan.maxTokens, selectedModel, runtimeConfig);
+        await pushMergeProgressStep("Received model response. Validating profile JSON.", 58 + (attempt * 16), { detail: attemptLabel });
         try {
           profile = parseJsonFromModelOutput(raw);
+          await pushMergeProgressStep("Profile JSON parsed successfully.", 74, { level: "success" });
           pushProcessStep("Profile response parsed successfully.", "success");
           break;
         } catch (parseErr) {
           lastParseError = parseErr;
+          await pushMergeProgressStep("Response parse failed. Preparing retry with stricter JSON constraints.", 64 + (attempt * 10), {
+            level: "warning",
+            detail: attemptLabel,
+          });
           pushProcessStep("Model response was not valid profile JSON.", "warning", `Attempt ${attempt + 1} failed parsing`);
           logDiagnosticEvent(
             "profile:train:json_parse_failed",
@@ -794,6 +850,7 @@ export default function App() {
         throw (lastParseError || new Error("Failed to parse profile JSON from model response."));
       }
 
+      await pushMergeProgressStep("Applying merged profile and sample dedupe rules.", 86);
       setStyles(prev => {
         const existingProfile = prev[activeProfileId];
         const existingSamples = existingProfile
@@ -819,13 +876,21 @@ export default function App() {
         };
       });
 
+      await pushMergeProgressStep(existing ? "Finalizing merged profile." : "Finalizing new profile.", 96);
       setStatus(existing ? "Profile updated!" : "Profile created!");
+      await pushMergeProgressStep(existing ? "Profile merge complete." : "Profile analysis complete.", 100, { level: "success" });
       pushProcessStep(existing ? "Profile merge complete." : "Profile analysis complete.", "success");
       completeProcess(existing ? "Profile updated successfully." : "Profile created successfully.");
-      setTimeout(() => { setStatus(""); setStyleModalOpen(false); }, 900);
+      setTimeout(() => {
+        setStatus("");
+        setStyleModalOpen(false);
+        setMergeProgressOpen(false);
+        clearMergeProgress();
+      }, 1100);
       return true;
     } catch (e) {
       const message = getErrorMessage(e);
+      await pushMergeProgressStep("Profile merge failed.", 100, { level: "error", detail: message, delay: false });
       if (isMissingApiKeyError(message)) {
         pushProcessStep("OpenRouter API key missing. Opening API key dialog.", "error");
         setApiKeyRequired(true);
@@ -833,8 +898,13 @@ export default function App() {
       }
       logRequestFailure("Profile training failed.", message);
       setError("Failed: " + message);
+      setTimeout(() => {
+        setMergeProgressOpen(false);
+        clearMergeProgress();
+      }, 1200);
       return false;
     } finally {
+      setProfileMergeLoading(false);
       setLoading(false);
     }
   }
@@ -964,7 +1034,7 @@ export default function App() {
     const activeProfile = styles[activeProfileId];
     if (!activeProfile) { setError("Onboard your writing profile first."); return; }
     if (inputText.trim().length < 20) { setError("Paste some text to humanize (20+ chars)."); return; }
-    setError(""); setLoading(true); setStatus("Rewriting in your voice…");
+    setError(""); setLoading(true); setRequestLoading(true); setStatus("Rewriting in your voice…");
     startProcessLog("Starting rewrite request.", `Mode: humanize via ${selectedModel}`);
     try {
       pushProcessStep("Validating profile and source text.");
@@ -1036,7 +1106,7 @@ export default function App() {
       logRequestFailure("Rewrite request failed.", message);
       setError("Failed: " + message);
     }
-    finally { setLoading(false); }
+    finally { setRequestLoading(false); setLoading(false); }
   }
 
   // ── Elaborate ──
@@ -1044,7 +1114,7 @@ export default function App() {
     const activeProfile = styles[activeProfileId];
     if (!activeProfile) { setError("Onboard your writing profile first."); return; }
     if (inputText.trim().length < 10) { setError("Write something to elaborate on."); return; }
-    setError(""); setLoading(true); setStatus("Expanding your writing…");
+    setError(""); setLoading(true); setRequestLoading(true); setStatus("Expanding your writing…");
     startProcessLog("Starting expansion request.", `Mode: elaborate via ${selectedModel}`);
     try {
       pushProcessStep("Validating profile and source text.");
@@ -1097,7 +1167,7 @@ export default function App() {
       logRequestFailure("Expansion request failed.", message);
       setError("Failed: " + message);
     }
-    finally { setLoading(false); }
+    finally { setRequestLoading(false); setLoading(false); }
   }
 
   const activeSession = activeSessionId ? historyState.sessionsById[activeSessionId] || null : null;
@@ -1223,7 +1293,7 @@ export default function App() {
                 onChange={handleInputChange}
                 mode={mode}
                 onModeChange={handleModeChange}
-                loading={loading}
+                loading={requestLoading}
                 progressLabel={requestProgressLabel}
                 progressTone={requestProgressTone}
                 hasStyle={hasProfile}
@@ -1401,7 +1471,7 @@ export default function App() {
       {styleModalOpen && (
         <StyleModal
           hasProfile={hasProfile}
-          loading={loading}
+          loading={profileMergeLoading}
           health={health}
           profileLabel={PROFILE_OPTIONS.find((profile) => profile.id === activeProfileId)?.label || activeProfile?.name}
           sampleCount={activeProfile?.sampleEntries?.length || activeProfile?.sampleCount || 0}
@@ -1409,6 +1479,20 @@ export default function App() {
           onClose={() => setStyleModalOpen(false)}
         />
       )}
+
+      <MergeProgressModal
+        opened={mergeProgressOpen}
+        loading={profileMergeLoading}
+        title={mergeProgressTitle}
+        label={mergeProgressLabel}
+        progressValue={mergeProgressValue}
+        steps={mergeProgressSteps}
+        onClose={() => {
+          if (profileMergeLoading) return;
+          setMergeProgressOpen(false);
+          clearMergeProgress();
+        }}
+      />
 
       {apiKeyModalOpen && isTauriRuntime() && (
         <ApiKeyModal

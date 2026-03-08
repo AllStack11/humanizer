@@ -63,3 +63,5 @@ __pycache__/
 # Test snapshots and misc artifacts
 *.snap
 *.seed
+src-tauri/.voice-humanizer/logs
+src-tauri/.voice-humanizer/logs/openrouter-debug.log

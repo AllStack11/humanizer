@@ -2402,6 +2402,104 @@ button {
   gap: 18px;
 }
 
+.merge-progress-modal {
+  gap: 12px;
+}
+
+.merge-progress-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.merge-progress-kicker {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6f6658;
+}
+
+.merge-progress-percent {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #524839;
+}
+
+.merge-progress-track {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(104, 76, 43, 0.14);
+}
+
+.merge-progress-bar {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  transition: width 0.45s ease;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 68%, white) 0%, var(--accent) 100%);
+}
+
+.merge-progress-step-list {
+  display: grid;
+  gap: 10px;
+  max-height: min(300px, 46vh);
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.merge-progress-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.merge-progress-step-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: rgba(104, 76, 43, 0.42);
+  flex: 0 0 auto;
+}
+
+.merge-progress-step-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.merge-progress-step-message {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--app-text);
+}
+
+.merge-progress-step-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #887d6e;
+}
+
+.merge-progress-step--success .merge-progress-step-dot {
+  background: #2f9e44;
+}
+
+.merge-progress-step--warning .merge-progress-step-dot {
+  background: #d97706;
+}
+
+.merge-progress-step--error .merge-progress-step-dot {
+  background: #dc2626;
+}
+
 .debug-block {
   border: 1px solid rgba(148, 163, 184, 0.18);
   border-radius: 16px;
