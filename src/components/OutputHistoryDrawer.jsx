@@ -1,5 +1,12 @@
 import { NativeSelect } from "@mantine/core";
 import { Button, Card } from "./AppUI.jsx";
+import {
+  buildHistoryUserSegments,
+  getHistoryDepthLabel,
+  getHistoryGenerationTypeLabel,
+  getHistoryPresetLabel,
+  getHistoryToneLabel,
+} from "../lib/output-history.js";
 
 function formatTimestamp(value) {
   try {
@@ -7,6 +14,11 @@ function formatTimestamp(value) {
   } catch {
     return "";
   }
+}
+
+function formatPresetDisplay(entry) {
+  const label = getHistoryPresetLabel(entry);
+  return label === "No preset" ? "None" : label;
 }
 
 export default function OutputHistoryDrawer({
@@ -24,6 +36,8 @@ export default function OutputHistoryDrawer({
   onRenameEntry,
   onDeleteEntry,
 }) {
+  const selectedEntryUserSegments = buildHistoryUserSegments(selectedEntry);
+
   return (
     <div className="panel-grid output-history-layout">
       <Card className="app-card">
@@ -92,6 +106,13 @@ export default function OutputHistoryDrawer({
                   <span className="output-history-item-title">{entry.title}</span>
                   <span className="text-mono output-history-item-meta">
                     {entry.profileId || "unknown"} · {entry.mode} · {entry.model || "Unknown model"}
+                  </span>
+                  <span className="text-mono output-history-item-meta">
+                    Type: {getHistoryGenerationTypeLabel(entry)}
+                    {` · `}
+                    Preset: {formatPresetDisplay(entry)}
+                    {entry.mode === "elaborate" ? ` · Depth: ${getHistoryDepthLabel(entry)}` : ""}
+                    {` · Tone: ${getHistoryToneLabel(entry)}`}
                   </span>
                   <span className="text-mono output-history-item-meta">
                     {formatTimestamp(entry.createdAt)} · {entry.isSaved ? "Saved" : "Recent"}
@@ -180,12 +201,32 @@ export default function OutputHistoryDrawer({
                   <span className="text-mono">Profile: {selectedEntry.profileId}</span>
                   <span className="text-mono">Mode: {selectedEntry.mode}</span>
                   <span className="text-mono">Model: {selectedEntry.model || "Unknown model"}</span>
+                  <span className="text-mono">Preset: {formatPresetDisplay(selectedEntry)}</span>
+                  {selectedEntry.mode === "elaborate" ? (
+                    <span className="text-mono">Depth: {getHistoryDepthLabel(selectedEntry)}</span>
+                  ) : null}
+                  <span className="text-mono">Tone: {getHistoryToneLabel(selectedEntry)}</span>
+                  <span className="text-mono">Type: {getHistoryGenerationTypeLabel(selectedEntry)}</span>
                   <span className="text-mono">Created: {formatTimestamp(selectedEntry.createdAt)}</span>
                   <span className="text-mono">Status: {selectedEntry.status}</span>
+                  <span className="text-mono">Direction: {selectedEntry.extraDirection?.trim() ? "Present" : "None"}</span>
+                  <span className="text-mono">Feedback: {selectedEntry.regenerateFeedback?.trim() ? "Present" : "None"}</span>
                 </div>
                 <div className="surface-box output-history-detail-block">
                   <div className="text-mono output-history-detail-label">Source</div>
-                  <div className="output-history-detail-text">{selectedEntry.sourceText || "No source text captured."}</div>
+                  <div className="output-history-detail-text">
+                    {selectedEntryUserSegments.sourceText || "No source text captured."}
+                  </div>
+                  {selectedEntryUserSegments.extraDirection ? (
+                    <div className="output-history-detail-note output-history-detail-note--direction">
+                      Extra direction: {selectedEntryUserSegments.extraDirection}
+                    </div>
+                  ) : null}
+                  {selectedEntryUserSegments.regenerateFeedback ? (
+                    <div className="output-history-detail-note output-history-detail-note--feedback">
+                      Regeneration feedback: {selectedEntryUserSegments.regenerateFeedback}
+                    </div>
+                  ) : null}
                 </div>
                 <div className="surface-box output-history-detail-block">
                   <div className="text-mono output-history-detail-label">Output</div>

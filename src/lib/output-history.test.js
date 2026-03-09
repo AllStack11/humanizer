@@ -74,11 +74,11 @@ describe("output-history store", () => {
     saveMock.mockResolvedValue(undefined);
   });
 
-  test("normalizes source text and builds stable thread keys", () => {
+  test("normalizes source text and builds profile-stable thread keys", () => {
     expect(normalizeSourceText("  hello \n world  ")).toBe("hello world");
     expect(
       buildSessionThreadKey({ profileId: "personal", mode: "humanize", sourceText: "hello   world" })
-    ).toBe("personal::humanize::hello world");
+    ).toBe("personal");
   });
 
   test("builds titles and search text from entry content", () => {
@@ -146,6 +146,21 @@ describe("output-history store", () => {
     const latestMatch = getOrCreateActiveSession(appendedState, profileId, seed, "missing-session");
     expect(latestMatch.session.id).toBe(firstSession.id);
     expect(latestMatch.created).toBe(false);
+  });
+
+  test("creates a fresh session when forceCreate is enabled", () => {
+    const profileId = "personal";
+    const seed = {
+      mode: "humanize",
+      sourceTextSnapshot: "Original source text",
+      threadKey: buildSessionThreadKey({ profileId, mode: "humanize", sourceText: "Original source text" }),
+    };
+
+    const { state: firstState, session: firstSession } = getOrCreateActiveSession(createEmptyOutputHistory(), profileId, seed);
+    const forced = getOrCreateActiveSession(firstState, profileId, seed, firstSession.id, { forceCreate: true });
+
+    expect(forced.created).toBe(true);
+    expect(forced.session.id).not.toBe(firstSession.id);
   });
 
   test("appendHistoryEntry adds entries in session order and reverse global order", () => {

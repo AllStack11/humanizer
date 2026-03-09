@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { NativeSelect, Tooltip } from "@mantine/core";
+import { NativeSelect } from "@mantine/core";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import { Button, Card } from "./AppUI.jsx";
 import ToggleSwitch from "./ToggleSwitch.jsx";
 import { DynamicHighlighter } from "../lib/tiptap-highlighter.js";
+import { isTauriRuntime, tauriInvoke } from "../lib/tauri.js";
 import { ELAB_DEPTHS, OUTPUT_PRESET_OPTIONS, TONE_LEVELS } from "../constants/index.js";
 import { buildClicheRanges } from "../utils/index.js";
 import { renderMarkdownToHtml } from "../utils/markdown.js";
@@ -122,29 +123,35 @@ function EditorIcon({ children }) {
   );
 }
 
-function DepthScaleIcon({ level, active }) {
+function ToolbarRangeControl({ value, onChange, options, ariaLabel }) {
+  const max = Math.max(options.length - 1, 0);
+  const safeValue = Math.min(Math.max(Number(value) || 0, 0), max);
+  const valuePct = max === 0 ? 0 : (safeValue / max) * 100;
+  const activeOption = options[safeValue] || options[0];
+
   return (
-    <span className={`editor-depth-scale-icon${active ? " is-active" : ""}`} aria-hidden="true">
-      {[0, 1, 2].map((step) => (
-        <span
-          key={step}
-          className="editor-depth-scale-bar"
-          style={{ height: `${6 + Math.max(level - 2 + step, 0) * 3}px` }}
+    <div className="editor-range-control" aria-label={ariaLabel}>
+      <div className="editor-range-track-wrap" style={{ "--editor-range-pct": `${valuePct}%` }}>
+        <div className="editor-range-bubble" aria-hidden="true">
+          {activeOption?.label}
+        </div>
+        <input
+          type="range"
+          min={0}
+          max={max}
+          step={1}
+          value={safeValue}
+          onChange={(event) => onChange(Number(event.currentTarget.value))}
+          aria-label={ariaLabel}
+          className="editor-range-input"
         />
-      ))}
-    </span>
-  );
-}
-
-function ToneScaleIcon({ level }) {
-  const dotSize = [6, 8, 10, 12, 14][level] ?? 10;
-  const lineWidth = [8, 10, 12, 14, 16][level] ?? 12;
-
-  return (
-    <span className="editor-tone-scale-icon" aria-hidden="true">
-      <span className="editor-tone-scale-dot" style={{ width: `${dotSize}px`, height: `${dotSize}px` }} />
-      <span className="editor-tone-scale-line" style={{ width: `${lineWidth}px` }} />
-    </span>
+        <div className="editor-range-marks" aria-hidden="true">
+          {options.map((option, index) => (
+            <span key={`${option.label}-${index}`} className={`editor-range-mark${index <= safeValue ? " is-active" : ""}`} />
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -182,6 +189,7 @@ export default function WriterPanel({
   onModelChange,
   modelOptions,
   onAddModel,
+  onNewChat,
   onSubmit,
 }) {
   const textareaRef = useRef(null);
@@ -192,6 +200,7 @@ export default function WriterPanel({
   const meetsMinimum = inputLength >= minChars;
   const busy = loading;
   const canAttemptSubmit = !busy && meetsMinimum;
+  const presentTypeLabel = mode === "humanize" ? TONE_LEVELS[toneLevel]?.label : ELAB_DEPTHS[elabDepth]?.label;
   const [instructionOpen, setInstructionOpen] = useState(Boolean(oneOffInstruction?.trim()));
 
   function submitSoon() {
@@ -200,8 +209,20 @@ export default function WriterPanel({
 
   async function pasteFromClipboard() {
     try {
-      if (!navigator?.clipboard?.readText) return;
-      const pastedText = await navigator.clipboard.readText();
+      let pastedText = "";
+
+      if (isTauriRuntime()) {
+        try {
+          const nativeText = await tauriInvoke("read_clipboard_text");
+          if (typeof nativeText === "string") pastedText = nativeText;
+        } catch {}
+      }
+
+      if (!pastedText && navigator?.clipboard?.readText) {
+        const browserText = await navigator.clipboard.readText();
+        if (typeof browserText === "string") pastedText = browserText;
+      }
+
       if (typeof pastedText !== "string") return;
       onChange(pastedText);
     } catch {}
@@ -272,46 +293,22 @@ export default function WriterPanel({
               </Button>
               {mode === "elaborate" ? (
                 <ToolbarScale label="Depth">
-                  <div className="editor-depth-toolbar" aria-label="Elaboration depth">
-                    {ELAB_DEPTHS.map((depth, index) => {
-                      const active = index === elabDepth;
-                      return (
-                        <Tooltip key={depth.label} label={`${depth.label}: ${depth.desc}`} withArrow openDelay={1500}>
-                          <button
-                            type="button"
-                            className={`editor-depth-button${active ? " is-active" : ""}`}
-                            onClick={() => onElabDepthChange(index)}
-                            aria-label={`Set depth to ${depth.label}`}
-                            aria-pressed={active}
-                          >
-                            <DepthScaleIcon level={index} active={active} />
-                          </button>
-                        </Tooltip>
-                      );
-                    })}
-                  </div>
+                  <ToolbarRangeControl
+                    value={elabDepth}
+                    onChange={onElabDepthChange}
+                    options={ELAB_DEPTHS}
+                    ariaLabel="Elaboration depth"
+                  />
                 </ToolbarScale>
               ) : null}
               {mode === "humanize" ? (
                 <ToolbarScale label="Tone">
-                  <div className="editor-depth-toolbar" aria-label="Rewrite tone">
-                    {TONE_LEVELS.map((tone, index) => {
-                      const active = index === toneLevel;
-                      return (
-                        <Tooltip key={tone.label} label={`${tone.label}: ${tone.desc}`} withArrow openDelay={1500}>
-                          <button
-                            type="button"
-                            className={`editor-depth-button${active ? " is-active" : ""}`}
-                            onClick={() => onToneLevelChange(index)}
-                            aria-label={`Set tone to ${tone.label}`}
-                            aria-pressed={active}
-                          >
-                            <ToneScaleIcon level={index} />
-                          </button>
-                        </Tooltip>
-                      );
-                    })}
-                  </div>
+                  <ToolbarRangeControl
+                    value={toneLevel}
+                    onChange={onToneLevelChange}
+                    options={TONE_LEVELS}
+                    ariaLabel="Rewrite tone"
+                  />
                 </ToolbarScale>
               ) : null}
               <ToolbarScale label="Preset">
@@ -329,18 +326,28 @@ export default function WriterPanel({
             </div>
 
             <div className="toolbar-row editor-topbar-meta">
-              {mode === "humanize" ? (
-                <span className="text-mono editor-depth-label">{TONE_LEVELS[toneLevel].label}</span>
-              ) : null}
-              {mode === "elaborate" ? (
-                <span className="text-mono editor-depth-label">{ELAB_DEPTHS[elabDepth].label}</span>
-              ) : null}
-              <span className="text-mono editor-word-count">{words} words</span>
+              <Button
+                size="sm"
+                variant="bordered"
+                onPress={() => onNewChat?.()}
+                aria-label="Start new chat"
+                tooltip="Start a new session"
+                iconOnly
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M12 5v14" />
+                  <path d="M5 12h14" />
+                </svg>
+              </Button>
             </div>
           </div>
 
           <div className="editor-wrap tiptap-wrap">
             <div className="editor-canvas">
+              <div className="editor-canvas-meta" aria-hidden="true">
+                {presentTypeLabel ? <span className="text-mono editor-canvas-meta-item">{presentTypeLabel}</span> : null}
+                <span className="text-mono editor-canvas-meta-item">{words} words</span>
+              </div>
               {IS_TEST_ENV ? (
                 <textarea
                   ref={textareaRef}
@@ -373,7 +380,6 @@ export default function WriterPanel({
                     variant="bordered"
                     onPress={pasteFromClipboard}
                     aria-label="Paste input"
-                    tooltip="Paste from clipboard"
                     iconOnly
                   >
                     <EditorIcon>

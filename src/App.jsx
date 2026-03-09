@@ -20,6 +20,7 @@ import {
 } from './lib/storage.js';
 import {
   appendHistoryEntry,
+  buildHistoryUserText,
   buildSessionThreadKey,
   createEmptyOutputHistory,
   getOrCreateActiveSession,
@@ -137,6 +138,7 @@ export default function App() {
   });
   const [historyState, setHistoryState] = useState(createEmptyOutputHistory());
   const [activeSessionId, setActiveSessionId] = useState(null);
+  const [forceNewSession, setForceNewSession] = useState(false);
   const [activeHistoryEntryId, setActiveHistoryEntryId] = useState(null);
   const [selectedHistoryPreviewEntryId, setSelectedHistoryPreviewEntryId] = useState(null);
   const [selectedGlobalHistoryEntryId, setSelectedGlobalHistoryEntryId] = useState(null);
@@ -146,6 +148,8 @@ export default function App() {
   const [styleModalOpen, setStyleModalOpen]   = useState(false);
   const backupSyncReadyRef = useRef(false);
   const historyStateRef = useRef(createEmptyOutputHistory());
+  const activeSessionIdRef = useRef(null);
+  const forceNewSessionRef = useRef(false);
 
   // Backup status
   const [backupStatus, setBackupStatus]         = useState("idle");
@@ -190,6 +194,14 @@ export default function App() {
   useEffect(() => {
     historyStateRef.current = historyState;
   }, [historyState]);
+
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    forceNewSessionRef.current = forceNewSession;
+  }, [forceNewSession]);
 
   function commitHistoryState(updater) {
     setHistoryState((prev) => {
@@ -278,12 +290,28 @@ export default function App() {
     };
   }
 
-  function recordCompletedOutput(nextOutput) {
+  function resolveSubmitSessionId() {
+    if (forceNewSessionRef.current) return null;
+    const currentSessionId = activeSessionIdRef.current;
+    if (currentSessionId && historyStateRef.current.sessionsById[currentSessionId]) {
+      return currentSessionId;
+    }
+    if (!activeHistoryEntryId) return null;
+    const activeEntry = historyStateRef.current.entriesById[activeHistoryEntryId];
+    if (!activeEntry?.sessionId) return null;
+    return historyStateRef.current.sessionsById[activeEntry.sessionId] ? activeEntry.sessionId : null;
+  }
+
+  function recordCompletedOutput(nextOutput, { sessionIdOverride = null, regenerateFeedback = "" } = {}) {
+    const presetInstruction = getFormatPresetInstruction(formatPreset);
+    const extraDirection = [presetInstruction, oneOffInstruction.trim()].filter(Boolean).join("\n");
     const payload = {
       profileId: activeProfileId,
       mode,
       model: selectedModel,
       sourceText: inputText,
+      extraDirection,
+      regenerateFeedback: String(regenerateFeedback || "").trim(),
       baseOutputText: nextOutput,
       currentOutputText: nextOutput,
       oneOffInstruction,
@@ -296,11 +324,13 @@ export default function App() {
       savedAt: null,
     };
     const sessionSeed = buildSessionSeed();
+    const shouldForceCreate = forceNewSessionRef.current && !sessionIdOverride;
     const { state: withSession, session } = getOrCreateActiveSession(
       historyStateRef.current,
       activeProfileId,
       sessionSeed,
-      activeSessionId
+      sessionIdOverride || activeSessionIdRef.current,
+      { forceCreate: shouldForceCreate }
     );
     const { state: appendedState, entry } = appendHistoryEntry(withSession, session.id, payload);
     const nextState = pruneUnsavedEntries(appendedState);
@@ -308,7 +338,12 @@ export default function App() {
     historyStateRef.current = nextState;
     setHistoryState(nextState);
     saveOutputHistory(nextState);
+    activeSessionIdRef.current = session.id;
     setActiveSessionId(session.id);
+    if (forceNewSessionRef.current) {
+      forceNewSessionRef.current = false;
+      setForceNewSession(false);
+    }
     setActiveHistoryEntryId(entry?.id || null);
     setSelectedHistoryPreviewEntryId(entry?.id || null);
     setSelectedGlobalHistoryEntryId(entry?.id || null);
@@ -630,6 +665,7 @@ export default function App() {
     historyStateRef.current = nextHistoryState;
     setHistoryState(nextHistoryState);
     await saveOutputHistory(nextHistoryState);
+    activeSessionIdRef.current = null;
     setActiveSessionId(null);
     setActiveHistoryEntryId(null);
     setSelectedHistoryPreviewEntryId(null);
@@ -739,7 +775,10 @@ export default function App() {
       setGlobalHistoryFilters({ profileId: "", mode: "", model: "", savedOnly: false });
       setHistoryState(createEmptyOutputHistory());
       historyStateRef.current = createEmptyOutputHistory();
+      activeSessionIdRef.current = null;
       setActiveSessionId(null);
+      forceNewSessionRef.current = false;
+      setForceNewSession(false);
       setActiveHistoryEntryId(null);
       setSelectedHistoryPreviewEntryId(null);
       setSelectedGlobalHistoryEntryId(null);
@@ -955,14 +994,14 @@ export default function App() {
     setSelectedHistoryPreviewEntryId(null);
   }
 
-  function commitOutput(nextOutput) {
+  function commitOutput(nextOutput, { sessionIdOverride = null, regenerateFeedback = "" } = {}) {
     const normalized = String(nextOutput || "");
     setOutputText(normalized);
     setOutputBaseline(normalized);
     setOutputCopied(false);
     setShowDiff(true);
     setOutputPhase("ready");
-    recordCompletedOutput(normalized);
+    recordCompletedOutput(normalized, { sessionIdOverride, regenerateFeedback });
   }
 
   function handleOutputChange(nextOutput) {
@@ -1019,7 +1058,7 @@ export default function App() {
   function copySessionHistoryPart(entryId, part) {
     const entry = historyStateRef.current.entriesById[entryId];
     if (!entry) return;
-    const text = part === "user" ? entry.sourceText : entry.baseOutputText;
+    const text = part === "user" ? buildHistoryUserText(entry) : entry.baseOutputText;
     if (!String(text || "").trim()) return;
     copyTextToClipboard(text, part === "user" ? "User text copied." : "Model text copied.");
   }
@@ -1051,6 +1090,7 @@ export default function App() {
   // ── Humanize ──
   async function humanize({ regenerateFeedback = "" } = {}) {
     const sourceText = resolveSourceText();
+    const sessionIdOverride = resolveSubmitSessionId();
     const activeProfile = styles[activeProfileId];
     if (!activeProfile) { setError("Onboard your writing profile first."); return; }
     if (sourceText.trim().length < 20) { setError("Paste some text to humanize (20+ chars)."); return; }
@@ -1111,7 +1151,7 @@ export default function App() {
         }
         throw new Error("The model returned an empty response.");
       }
-      commitOutput(out);
+      commitOutput(out, { sessionIdOverride, regenerateFeedback });
       pushProcessStep("Rewrite completed successfully.", "success", `${countWords(out)} words generated`);
       completeProcess("Rewrite completed successfully.");
       setStatus("");
@@ -1132,6 +1172,7 @@ export default function App() {
   // ── Elaborate ──
   async function elaborate({ regenerateFeedback = "" } = {}) {
     const sourceText = resolveSourceText();
+    const sessionIdOverride = resolveSubmitSessionId();
     const activeProfile = styles[activeProfileId];
     if (!activeProfile) { setError("Onboard your writing profile first."); return; }
     if (sourceText.trim().length < 10) { setError("Write something to elaborate on."); return; }
@@ -1173,7 +1214,7 @@ export default function App() {
         }
         throw new Error("The model returned an empty response.");
       }
-      commitOutput(out);
+      commitOutput(out, { sessionIdOverride, regenerateFeedback });
       pushProcessStep("Expansion completed successfully.", "success", `${countWords(out)} words generated`);
       completeProcess("Expansion completed successfully.");
       setStatus("");
@@ -1236,7 +1277,17 @@ export default function App() {
   const handleInputChange = (val) => {
     inputTextRef.current = val;
     setInputText(val);
+  };
+
+  const handleNewChat = () => {
+    inputTextRef.current = "";
+    setInputText("");
     clearOutputState();
+    activeSessionIdRef.current = null;
+    setActiveSessionId(null);
+    setSelectedGlobalHistoryEntryId(null);
+    forceNewSessionRef.current = true;
+    setForceNewSession(true);
   };
 
   const handleModeChange = (m) => {
@@ -1338,6 +1389,7 @@ export default function App() {
                 onModelChange={setSelectedModel}
                 modelOptions={modelOptions}
                 onAddModel={addCustomModelFromDropdown}
+                onNewChat={handleNewChat}
                 onSubmit={mode === "humanize" ? humanize : elaborate}
               />
             </div>

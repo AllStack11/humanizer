@@ -43,6 +43,11 @@
   --editor-overlay-text: color-mix(in srgb, white 76%, var(--app-surface-strong) 24%);
   --editor-overlay-muted: color-mix(in srgb, white 48%, var(--app-surface-strong) 52%);
   --editor-overlay-shadow: 0 18px 40px color-mix(in srgb, var(--app-text) 24%, transparent);
+  --motion-fast: 160ms;
+  --motion-base: 220ms;
+  --motion-slow: 320ms;
+  --motion-bounce: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-smooth: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 [data-theme="teal"] {
@@ -245,6 +250,7 @@ body {
     linear-gradient(180deg, #fbf5ec 0%, var(--app-bg) 48%, #dfd3bd 100%);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  transition: background 420ms var(--motion-smooth), color var(--motion-base) var(--motion-smooth);
 }
 
 button,
@@ -290,6 +296,7 @@ button {
   flex-direction: column;
   flex: 1;
   min-height: auto;
+  animation: surface-enter var(--motion-slow) var(--motion-bounce) both;
 }
 
 .app-sticky {
@@ -298,6 +305,7 @@ button {
   width: min(1240px, calc(100% - 32px));
   margin: 0 auto;
   padding-top: 18px;
+  animation: surface-enter var(--motion-slow) var(--motion-bounce) both;
 }
 
 .ui-card,
@@ -308,6 +316,17 @@ button {
   box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.07);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
+  transition:
+    transform var(--motion-base) var(--motion-bounce),
+    box-shadow var(--motion-base) var(--motion-smooth),
+    border-color var(--motion-base) var(--motion-smooth),
+    background var(--motion-slow) var(--motion-smooth);
+}
+
+.ui-card:hover,
+.app-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 14px 34px rgba(31, 38, 135, 0.11);
 }
 
 .ui-card-content {
@@ -345,6 +364,7 @@ button {
 .app-popup-notification {
   width: min(100%, 920px);
   pointer-events: auto;
+  animation: surface-enter var(--motion-base) var(--motion-bounce) both;
 }
 
 .app-primary-column,
@@ -369,6 +389,7 @@ button {
   flex: 1;
   min-height: 0;
   gap: 16px;
+  animation: surface-enter var(--motion-slow) var(--motion-bounce) both;
 }
 
 .app-editor-stack--with-output {
@@ -381,6 +402,7 @@ button {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
+  animation: surface-enter var(--motion-slow) var(--motion-bounce) both;
 }
 
 .app-coverage-note {
@@ -399,6 +421,12 @@ button {
   border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--app-border));
   color: var(--accent);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.74);
+  transition: transform var(--motion-base) var(--motion-bounce), box-shadow var(--motion-base) var(--motion-smooth);
+}
+
+.brand-mark:hover {
+  transform: translateY(-1px) scale(1.02);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.74), 0 10px 20px rgba(50, 40, 20, 0.12);
 }
 
 .brand-title {
@@ -406,6 +434,7 @@ button {
   line-height: 0.96;
   letter-spacing: -0.06em;
   font-weight: 800;
+  transition: color var(--motion-base) var(--motion-smooth), transform var(--motion-base) var(--motion-bounce);
 }
 
 .brand-subtitle {
@@ -413,6 +442,7 @@ button {
   color: var(--app-muted);
   font-size: 1rem;
   letter-spacing: -0.02em;
+  transition: color var(--motion-base) var(--motion-smooth), opacity var(--motion-fast) var(--motion-smooth);
 }
 
 .panel-title,
@@ -460,6 +490,7 @@ button {
   padding-top: 10px;
   color: var(--app-muted);
   font-size: 12px;
+  transition: border-color var(--motion-base) var(--motion-smooth), color var(--motion-base) var(--motion-smooth);
 }
 
 .backup-status {
@@ -471,6 +502,11 @@ button {
   border: 1px solid rgba(97, 76, 49, 0.12);
   background: rgba(255, 255, 255, 0.48);
   color: var(--app-text);
+  transition: transform var(--motion-fast) var(--motion-bounce), background var(--motion-base) var(--motion-smooth), border-color var(--motion-base) var(--motion-smooth), color var(--motion-base) var(--motion-smooth);
+}
+
+.backup-status:hover {
+  transform: translateY(-1px);
 }
 
 .backup-status-dot {
@@ -617,6 +653,18 @@ button {
   min-height: 48px;
   padding-inline: 16px;
   color: var(--app-text);
+}
+
+.app-select-wrap .mantine-NativeSelect-input {
+  transition:
+    border-color var(--motion-fast) var(--motion-smooth),
+    box-shadow var(--motion-base) var(--motion-smooth),
+    background var(--motion-base) var(--motion-smooth),
+    transform var(--motion-fast) var(--motion-bounce);
+}
+
+.app-select-wrap .mantine-NativeSelect-input:hover {
+  transform: translateY(-1px);
 }
 
 .ui-input-wrap input,
@@ -955,6 +1003,7 @@ button {
   background:
     radial-gradient(circle at top left, rgba(255, 255, 255, 0.34), transparent 34%),
     linear-gradient(180deg, rgba(122, 102, 74, 0.2) 0%, rgba(255, 248, 238, 0.16) 100%);
+  transition: background var(--motion-slow) var(--motion-smooth);
 }
 
 .editor-canvas {
@@ -971,6 +1020,10 @@ button {
     inset 0 1px 0 rgba(255, 255, 255, 0.42),
     var(--editor-shell-shadow);
   overflow: hidden;
+  transition:
+    border-color var(--motion-base) var(--motion-smooth),
+    box-shadow var(--motion-base) var(--motion-smooth),
+    background var(--motion-slow) var(--motion-smooth);
 }
 
 .editor-card {
@@ -989,6 +1042,7 @@ button {
     color-mix(in srgb, var(--accent) 12%, rgba(85, 69, 49, 0.08)) 0%,
     color-mix(in srgb, var(--app-surface-strong) 72%, transparent) 100%
   );
+  transition: background var(--motion-slow) var(--motion-smooth), box-shadow var(--motion-base) var(--motion-smooth);
 }
 
 .editor-card--humanize {
@@ -1017,6 +1071,7 @@ button {
   padding: 14px 18px 10px;
   border-bottom: 1px solid var(--editor-topbar-border);
   background: linear-gradient(180deg, var(--editor-topbar-surface-top) 0%, var(--editor-topbar-surface-bottom) 100%);
+  transition: border-color var(--motion-base) var(--motion-smooth), background var(--motion-base) var(--motion-smooth);
 }
 
 .editor-topbar-controls {
@@ -1052,6 +1107,15 @@ button {
   font-size: 11px;
   letter-spacing: 0.02em;
   text-align: center;
+  transition:
+    border-color var(--motion-fast) var(--motion-smooth),
+    background var(--motion-base) var(--motion-smooth),
+    color var(--motion-base) var(--motion-smooth),
+    transform var(--motion-fast) var(--motion-bounce);
+}
+
+.editor-topbar-select .mantine-NativeSelect-input:hover {
+  transform: translateY(-1px);
 }
 
 .editor-topbar-select .mantine-NativeSelect-input:focus {
@@ -1063,77 +1127,136 @@ button {
   color: color-mix(in srgb, var(--editor-toolbar-muted) 72%, transparent);
 }
 
-.editor-depth-toolbar {
+.editor-range-control {
+  display: inline-flex;
+}
+
+.editor-range-track-wrap {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 14px;
+  width: 186px;
+  padding: 10px 14px 8px;
   border-radius: 999px;
   border: 1px solid var(--editor-pill-border);
   background: var(--editor-pill-surface);
+  transition: border-color var(--motion-base) var(--motion-smooth), background var(--motion-base) var(--motion-smooth);
 }
 
-.editor-depth-button {
+.editor-range-control:hover .editor-range-track-wrap {
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--editor-pill-border));
+}
+
+.editor-range-bubble {
+  position: absolute;
+  left: var(--editor-range-pct);
+  top: 1px;
+  transform: translate(-50%, -100%);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: 0;
+  padding: 2px 8px;
   border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--editor-pill-border));
+  background: color-mix(in srgb, var(--editor-bg-solid) 92%, var(--accent));
+  color: var(--editor-toolbar-strong);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.editor-range-input {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  margin: 0;
+  appearance: none;
   background: transparent;
-  color: var(--editor-toolbar-muted);
-  transition:
-    background-color 0.16s ease,
-    color 0.16s ease,
-    transform 0.16s ease;
+  outline: none;
 }
 
-.editor-depth-button:hover {
-  background: var(--editor-pill-hover);
-  color: var(--editor-toolbar-strong);
-}
-
-.editor-depth-button:focus-visible {
-  outline: 1px solid color-mix(in srgb, var(--accent) 58%, white);
-  outline-offset: 1px;
-}
-
-.editor-depth-button.is-active {
-  background: var(--editor-pill-active);
-  color: var(--editor-toolbar-strong);
-}
-
-.editor-depth-scale-icon {
-  display: inline-flex;
-  align-items: flex-end;
-  gap: 2px;
-  height: 14px;
-}
-
-.editor-depth-scale-bar {
-  width: 2px;
+.editor-range-input::-webkit-slider-runnable-track {
+  height: 3px;
   border-radius: 999px;
-  background: currentColor;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent) 74%, white) 0%,
+    color-mix(in srgb, var(--accent) 74%, white) var(--editor-range-pct),
+    var(--editor-pill-border) var(--editor-range-pct),
+    var(--editor-pill-border) 100%
+  );
 }
 
-.editor-tone-scale-icon {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
+.editor-range-input::-webkit-slider-thumb {
+  appearance: none;
+  margin-top: -5px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, white);
+  background: var(--editor-bg-solid);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+  transition: transform var(--motion-fast) var(--motion-bounce), box-shadow var(--motion-fast) var(--motion-smooth);
 }
 
-.editor-tone-scale-dot,
-.editor-tone-scale-line {
-  display: inline-flex;
+.editor-range-input:hover::-webkit-slider-thumb {
+  transform: scale(1.06);
+}
+
+.editor-range-input:focus-visible::-webkit-slider-thumb {
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent),
+    0 0 0 4px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.editor-range-input::-moz-range-track {
+  height: 3px;
   border-radius: 999px;
-  background: currentColor;
-  flex-shrink: 0;
+  background: var(--editor-pill-border);
 }
 
-.editor-tone-scale-line {
-  height: 2px;
+.editor-range-input::-moz-range-progress {
+  height: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 74%, white);
+}
+
+.editor-range-input::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, white);
+  background: var(--editor-bg-solid);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.editor-range-input:focus-visible {
+  outline: none;
+}
+
+.editor-range-marks {
+  position: absolute;
+  inset: 50% 14px auto;
+  transform: translateY(-50%);
+  display: inline-flex;
+  justify-content: center;
+  width: calc(100% - 28px);
+  pointer-events: none;
+}
+
+.editor-range-mark {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--editor-toolbar-muted) 46%, transparent);
+  transition: background var(--motion-fast) var(--motion-smooth), transform var(--motion-fast) var(--motion-bounce);
+}
+
+.editor-range-mark.is-active {
+  background: color-mix(in srgb, var(--accent) 72%, white);
+  transform: scale(1.05);
 }
 
 .editor-depth-label {
@@ -1148,9 +1271,22 @@ button {
   gap: 10px;
 }
 
-.editor-word-count {
-  font-size: 11px;
-  color: color-mix(in srgb, var(--editor-toolbar-strong) 80%, transparent);
+.editor-canvas-meta {
+  position: absolute;
+  top: 14px;
+  right: 18px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.editor-canvas-meta-item {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--editor-text-color) 46%, transparent);
 }
 
 .editor-action-icon {
@@ -1176,7 +1312,7 @@ button {
   min-height: 100%;
   border: 0;
   resize: vertical;
-  padding: 24px 28px 172px;
+  padding: 46px 28px 172px;
   background: transparent;
   color: var(--editor-text-color);
   font-family: var(--editor-font);
@@ -1193,7 +1329,7 @@ button {
 .tiptap-wrap .ProseMirror {
   outline: none;
   min-height: 100%;
-  padding: 24px 28px 172px;
+  padding: 46px 28px 172px;
   color: var(--editor-text-color);
   font-family: var(--editor-font);
   font-size: 18px;
@@ -1241,6 +1377,14 @@ button {
   border: 1px solid var(--editor-overlay-border);
   background: var(--editor-overlay-surface);
   backdrop-filter: blur(18px);
+  transition:
+    transform var(--motion-fast) var(--motion-bounce),
+    background var(--motion-base) var(--motion-smooth),
+    border-color var(--motion-base) var(--motion-smooth);
+}
+
+.editor-instruction-trigger:hover {
+  transform: translateY(-1px);
 }
 
 .editor-instruction-input {
@@ -1252,6 +1396,10 @@ button {
   background: linear-gradient(180deg, var(--editor-overlay-surface) 0%, var(--editor-overlay-surface-strong) 100%);
   box-shadow: var(--editor-overlay-shadow);
   color: var(--editor-overlay-text);
+  transition:
+    border-color var(--motion-fast) var(--motion-smooth),
+    box-shadow var(--motion-base) var(--motion-smooth),
+    background var(--motion-base) var(--motion-smooth);
 }
 
 .editor-instruction-input::placeholder {
@@ -1313,6 +1461,14 @@ button {
   border: 1px solid var(--editor-overlay-border);
   background: var(--editor-overlay-surface);
   backdrop-filter: blur(18px);
+  transition:
+    border-color var(--motion-base) var(--motion-smooth),
+    background var(--motion-base) var(--motion-smooth),
+    transform var(--motion-fast) var(--motion-bounce);
+}
+
+.editor-quick-actions:hover {
+  transform: translateY(-1px);
 }
 
 .editor-quick-actions .ui-button--sm.ui-button--icon-only,
@@ -1332,6 +1488,15 @@ button {
   background: var(--editor-overlay-surface);
   box-shadow: var(--editor-overlay-shadow);
   backdrop-filter: blur(18px);
+  transition:
+    border-color var(--motion-base) var(--motion-smooth),
+    background var(--motion-base) var(--motion-smooth),
+    box-shadow var(--motion-base) var(--motion-smooth),
+    transform var(--motion-fast) var(--motion-bounce);
+}
+
+.editor-send-cluster:hover {
+  transform: translateY(-1px);
 }
 
 .editor-model-select {
@@ -1357,6 +1522,7 @@ button {
   font-size: 13px;
   font-weight: 600;
   letter-spacing: -0.02em;
+  transition: color var(--motion-base) var(--motion-smooth), opacity var(--motion-fast) var(--motion-smooth);
 }
 
 .editor-model-select .mantine-NativeSelect-input:focus {
@@ -1377,6 +1543,7 @@ button {
   min-height: 34px;
   padding: 0;
   border-radius: 12px;
+  transition: transform var(--motion-fast) var(--motion-bounce), box-shadow var(--motion-base) var(--motion-smooth);
 }
 
 .editor-send-button.ui-button--primary {
@@ -1499,6 +1666,7 @@ button {
   flex-direction: column;
   flex: 1 1 auto;
   overflow: hidden;
+  animation: surface-enter var(--motion-slow) var(--motion-bounce) both;
 }
 
 .output-panel-card .ui-card-content {
@@ -1533,6 +1701,10 @@ button {
   padding: 10px 12px;
   font-size: 13px;
   line-height: 1.45;
+  transition:
+    border-color var(--motion-fast) var(--motion-smooth),
+    box-shadow var(--motion-base) var(--motion-smooth),
+    background var(--motion-base) var(--motion-smooth);
 }
 
 .output-regenerate-feedback-input:focus-visible {
@@ -1551,6 +1723,7 @@ button {
   text-decoration: underline dotted color-mix(in srgb, var(--app-muted) 72%, transparent);
   text-underline-offset: 0.22em;
   cursor: help;
+  transition: color var(--motion-fast) var(--motion-smooth), text-decoration-color var(--motion-fast) var(--motion-smooth);
 }
 
 .output-toolbar-metric--interactive:focus-visible {
@@ -1597,73 +1770,61 @@ button {
 
 .output-source-card {
   display: grid;
-  gap: 4px;
-  padding: 8px 10px;
-  border-radius: 12px;
-  background:
-    radial-gradient(circle at 16% 0%, color-mix(in srgb, var(--accent) 12%, transparent) 0%, transparent 52%),
-    linear-gradient(180deg, color-mix(in srgb, var(--app-surface-strong) 92%, white 8%) 0%, color-mix(in srgb, var(--accent-soft) 18%, white) 100%);
-  transition: border-radius 220ms ease, box-shadow 220ms ease, background 220ms ease;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0 0;
+  background: transparent;
+  border-radius: 0;
+  transition: opacity 220ms ease;
 }
 
 .output-source-card--compare {
   height: 100%;
   min-height: 0;
   display: grid;
+  grid-template-columns: 1fr;
   grid-template-rows: auto minmax(0, 1fr);
+  align-items: stretch;
+  gap: 6px;
+  padding-top: 0;
 }
 
 .output-source-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  justify-content: flex-start;
+  gap: 6px;
 }
 
 .output-source-badge {
   font-size: 9px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: color-mix(in srgb, var(--accent) 54%, var(--app-text) 46%);
-}
-
-.output-source-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  border: 0;
-  background: transparent;
-  color: color-mix(in srgb, var(--app-muted) 86%, var(--accent) 14%);
-  font-size: 10px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  padding: 2px 4px;
-  border-radius: 8px;
-}
-
-.output-source-toggle:hover {
-  background: color-mix(in srgb, var(--accent-soft) 34%, transparent);
-}
-
-.output-source-toggle:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 55%, white);
-  outline-offset: 2px;
+  color: color-mix(in srgb, var(--accent) 44%, var(--app-muted) 56%);
 }
 
 .output-source-text {
   margin: 0;
-  color: color-mix(in srgb, var(--app-text) 78%, var(--accent) 22%);
-  font-size: 13px;
+  color: color-mix(in srgb, var(--accent) 62%, var(--app-muted) 38%);
+  font-size: 12px;
   font-weight: 500;
-  line-height: 1.4;
-  white-space: pre-wrap;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   overflow-wrap: anywhere;
 }
 
 .output-source-card--compare .output-source-text {
   min-height: 0;
   height: 100%;
+  white-space: pre-wrap;
   overflow: auto;
+  text-overflow: clip;
+  line-height: 1.45;
+  font-size: 13px;
+  color: color-mix(in srgb, var(--app-text) 78%, var(--accent) 22%);
 }
 
 .output-stream-box-shell {
@@ -1732,33 +1893,38 @@ button {
 
 .output-feedback-trigger {
   position: relative;
+  z-index: 5;
 }
 
 .output-feedback-slideout {
   position: absolute;
   right: calc(100% + 8px);
   top: -2px;
-  width: 0;
+  width: min(420px, 52vw);
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
-  transform: translateX(8px);
-  transition: width 180ms ease, opacity 150ms ease, transform 180ms ease;
-  overflow: hidden;
+  transform: translateX(10px) translateY(-2px) scale(0.98);
+  transform-origin: top right;
+  transition: opacity 160ms ease, transform 180ms ease, visibility 0ms linear 180ms;
+  overflow: visible;
   display: grid;
   gap: 8px;
-  padding: 0;
-  border: 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--app-border) 78%, transparent);
   border-radius: 14px;
-  background: color-mix(in srgb, var(--field-surface-top) 75%, white);
+  background: color-mix(in srgb, var(--field-surface-top) 68%, transparent);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 12px 28px rgba(18, 35, 24, 0.2);
+  z-index: 25;
 }
 
 .output-feedback-slideout.is-open {
-  width: min(420px, 52vw);
   opacity: 1;
+  visibility: visible;
   pointer-events: auto;
-  transform: translateX(0);
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--app-border) 84%, transparent);
+  transform: translateX(0) translateY(0) scale(1);
+  transition: opacity 160ms ease, transform 180ms ease;
 }
 
 .output-stream-copy {
@@ -1783,7 +1949,7 @@ button {
   font-family: var(--llm-font);
   font-size: 15px;
   line-height: 1.6;
-  transition: padding 220ms ease;
+  transition: padding var(--motion-base) var(--motion-smooth), background var(--motion-base) var(--motion-smooth);
 }
 
 .output-stream-box.is-streaming {
@@ -1855,6 +2021,7 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  transition: background var(--motion-fast) var(--motion-smooth), color var(--motion-fast) var(--motion-smooth);
 }
 
 .output-metrics-toggle:hover {
@@ -1896,6 +2063,16 @@ button {
   grid-template-columns: 1fr auto auto auto;
   gap: 8px;
   align-items: center;
+  transition:
+    border-color var(--motion-fast) var(--motion-smooth),
+    background var(--motion-base) var(--motion-smooth),
+    box-shadow var(--motion-base) var(--motion-smooth),
+    transform var(--motion-fast) var(--motion-bounce);
+}
+
+.output-metric-item:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 16px rgba(46, 34, 22, 0.08);
 }
 
 .output-metric-item--better {
@@ -2179,6 +2356,7 @@ button {
 
 .session-history-card {
   margin-top: 8px;
+  animation: surface-enter var(--motion-slow) var(--motion-bounce) both;
 }
 
 .session-history-head,
@@ -2297,6 +2475,7 @@ button {
   padding: 8px 10px 10px;
   border-radius: 16px;
   border: 1px solid transparent;
+  transition: border-color var(--motion-fast) var(--motion-smooth), background var(--motion-base) var(--motion-smooth);
 }
 
 .session-history-bubble-head {
@@ -2362,6 +2541,33 @@ button {
   word-break: break-word;
 }
 
+.session-history-bubble-note,
+.output-history-detail-note {
+  min-width: 0;
+  max-width: 100%;
+  white-space: pre-wrap;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.session-history-bubble-note--direction,
+.output-history-detail-note--direction {
+  color: color-mix(in srgb, var(--app-text) 72%, var(--accent) 28%);
+  font-size: 12px;
+}
+
+.session-history-bubble-note--feedback,
+.output-history-detail-note--feedback {
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: color-mix(in srgb, #b45309 78%, var(--app-text) 22%);
+  background: color-mix(in srgb, var(--danger-soft) 62%, transparent);
+  border: 1px solid color-mix(in srgb, #b45309 24%, transparent);
+  border-radius: 10px;
+  padding: 6px 8px;
+  font-size: 11px;
+}
+
 .output-history-search {
   width: 100%;
   min-height: 44px;
@@ -2370,6 +2576,10 @@ button {
   background: linear-gradient(180deg, rgba(255,255,255,0.98) 0%, var(--app-surface-soft) 100%);
   color: var(--app-text);
   padding: 0 14px;
+  transition:
+    border-color var(--motion-fast) var(--motion-smooth),
+    box-shadow var(--motion-base) var(--motion-smooth),
+    background var(--motion-base) var(--motion-smooth);
 }
 
 .output-history-filters {
@@ -2425,11 +2635,13 @@ button {
   padding: 24px;
   background: rgba(15, 23, 42, 0.18);
   backdrop-filter: blur(10px);
+  animation: fade-in var(--motion-base) var(--motion-smooth) both;
 }
 
 .modal-content {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.97) 0%, rgba(247, 250, 252, 0.96) 100%);
   border: 1px solid var(--app-border);
+  animation: surface-enter var(--motion-base) var(--motion-bounce) both;
 }
 
 .settings-drawer {
@@ -2437,6 +2649,7 @@ button {
   background: linear-gradient(180deg, rgba(255, 251, 246, 0.96) 0%, rgba(243, 236, 224, 0.96) 100%);
   border: 1px solid var(--app-border);
   box-shadow: 0 24px 64px rgba(15, 23, 42, 0.2);
+  animation: drawer-enter var(--motion-slow) var(--motion-bounce) both;
 }
 
 .editor-settings-drawer {
@@ -2541,6 +2754,7 @@ button {
   display: flex;
   align-items: flex-start;
   gap: 10px;
+  animation: fade-in var(--motion-base) var(--motion-smooth) both;
 }
 
 .merge-progress-step-dot {
@@ -2615,6 +2829,16 @@ button {
   border: 1px solid color-mix(in srgb, var(--accent) 14%, var(--app-border));
   background: linear-gradient(180deg, rgba(255, 251, 246, 0.8) 0%, rgba(245, 238, 226, 0.92) 100%);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.68);
+  transition:
+    transform var(--motion-fast) var(--motion-bounce),
+    border-color var(--motion-base) var(--motion-smooth),
+    box-shadow var(--motion-base) var(--motion-smooth),
+    background var(--motion-base) var(--motion-smooth);
+}
+
+.controls-section:hover {
+  transform: translateY(-1px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.68), 0 10px 24px rgba(41, 31, 20, 0.08);
 }
 
 .controls-toggle {
@@ -2683,6 +2907,11 @@ button {
   border: 4px solid white;
   background: var(--accent);
   box-shadow: 0 4px 14px rgba(33, 74, 94, 0.24);
+  transition: transform var(--motion-fast) var(--motion-bounce), box-shadow var(--motion-base) var(--motion-smooth), background var(--motion-base) var(--motion-smooth);
+}
+
+.tone-slider .mantine-Slider-thumb:hover {
+  transform: scale(1.05);
 }
 
 .tone-slider .mantine-Slider-mark {
@@ -2727,6 +2956,51 @@ pre {
   }
 }
 
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes surface-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.992);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes drawer-enter {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 @media (min-width: 900px) {
   .app-workspace {
     display: flex;
@@ -2751,11 +3025,16 @@ pre {
     flex-direction: column;
     flex: 1 1 auto;
     min-height: 0;
-    max-height: none;
+    max-height: 100vh;
+    transition:
+      max-height 220ms var(--motion-smooth),
+      flex-basis 220ms var(--motion-smooth),
+      min-height 220ms var(--motion-smooth);
   }
 
   .app-editor-sticky--with-output {
-    flex: 0 0 clamp(280px, 40vh, 420px);
+    flex: 0 0 clamp(360px, 60vh, 640px);
+    max-height: clamp(360px, 60vh, 640px);
   }
 
   .app-editor-sticky .app-card {
@@ -2839,12 +3118,12 @@ pre {
 
   .editor-textarea {
     min-height: 52vh;
-    padding: 20px 20px 190px;
+    padding: 42px 20px 190px;
     font-size: 15px;
   }
 
   .tiptap-wrap .ProseMirror {
-    padding: 20px 20px 190px;
+    padding: 42px 20px 190px;
     font-size: 15px;
   }
 
@@ -2854,14 +3133,22 @@ pre {
   }
 
   .editor-topbar-controls,
-  .editor-depth-toolbar {
+  .editor-range-control {
     flex-wrap: wrap;
+  }
+
+  .editor-range-track-wrap {
+    width: min(100%, 220px);
   }
 
   .editor-topbar-meta {
     margin-left: 0;
-    width: 100%;
-    justify-content: space-between;
+    width: auto;
+    justify-content: flex-end;
+  }
+
+  .editor-canvas-meta {
+    right: 14px;
   }
 
   .editor-wrap {
@@ -2950,10 +3237,16 @@ pre {
     font-size: 15px;
   }
 
+  .app-editor-stack .app-editor-sticky {
+    transition:
+      min-height 220ms var(--motion-smooth),
+      max-height 220ms var(--motion-smooth);
+  }
+
   .app-editor-stack--with-output .app-editor-sticky {
     flex: 0 0 auto;
-    min-height: 42vh;
-    max-height: 52vh;
+    min-height: 60vh;
+    max-height: 68vh;
   }
 
   .app-editor-stack--with-output .app-inline-output-panel {

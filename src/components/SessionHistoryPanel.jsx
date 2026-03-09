@@ -1,5 +1,12 @@
 import { useState } from "react";
 import { Button, Card } from "./AppUI.jsx";
+import {
+  buildHistoryUserSegments,
+  getHistoryDepthLabel,
+  getHistoryGenerationTypeLabel,
+  getHistoryPresetLabel,
+  getHistoryToneLabel,
+} from "../lib/output-history.js";
 
 export default function SessionHistoryPanel({
   entries,
@@ -17,6 +24,13 @@ export default function SessionHistoryPanel({
       ...prev,
       [entryId]: !prev[entryId],
     }));
+  }
+
+  function trimPreview(value, max = 72) {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    if (text.length <= max) return text;
+    return `${text.slice(0, max)}…`;
   }
 
   return (
@@ -48,6 +62,11 @@ export default function SessionHistoryPanel({
             {entries.map((entry, index) => {
               const isExpanded = !!expandedEntries[entry.id];
               const generationLabel = index === 0 ? "Original" : `Regen ${index}`;
+              const { sourceText, extraDirection, regenerateFeedback } = buildHistoryUserSegments(entry);
+              const presetLabel = getHistoryPresetLabel(entry);
+              const depthLabel = entry.mode === "elaborate" ? getHistoryDepthLabel(entry) : null;
+              const toneLabel = getHistoryToneLabel(entry);
+              const generationTypeLabel = getHistoryGenerationTypeLabel(entry);
 
               return (
                 <div
@@ -70,6 +89,8 @@ export default function SessionHistoryPanel({
                   <div className="toolbar-row session-history-item-tools">
                     <span className="text-mono session-history-meta">
                       {generationLabel} · {entry.currentOutputText !== entry.baseOutputText ? "Edited" : "Raw"} · {entry.model || "Unknown model"}
+                      {entry.extraDirection?.trim() ? " · Direction" : ""}
+                      {entry.regenerateFeedback?.trim() ? " · Feedback" : ""}
                     </span>
                     <Button
                       variant="bordered"
@@ -88,6 +109,23 @@ export default function SessionHistoryPanel({
                     </Button>
                   </div>
                 </div>
+                <div className="text-mono session-history-meta">
+                  Type: {generationTypeLabel}
+                  {` · `}
+                  Preset: {presetLabel === "No preset" ? "None" : presetLabel}
+                  {depthLabel ? ` · Depth: ${depthLabel}` : ""}
+                  {toneLabel ? ` · Tone: ${toneLabel}` : ""}
+                </div>
+                {entry.extraDirection?.trim() ? (
+                  <div className="text-mono session-history-meta">
+                    Direction: {trimPreview(entry.extraDirection)}
+                  </div>
+                ) : null}
+                {entry.regenerateFeedback?.trim() ? (
+                  <div className="text-mono session-history-meta">
+                    Feedback: {trimPreview(entry.regenerateFeedback)}
+                  </div>
+                ) : null}
                 <div className="session-history-thread-preview">
                   <div className="session-history-column session-history-column--user">
                     <div className="session-history-bubble session-history-bubble--user">
@@ -112,8 +150,18 @@ export default function SessionHistoryPanel({
                         </Button>
                       </div>
                       <span className={`session-history-bubble-text${isExpanded ? " is-expanded" : ""}`}>
-                        {entry.sourceText || "No source text captured."}
+                        {sourceText || "No source text captured."}
                       </span>
+                      {extraDirection ? (
+                        <span className="session-history-bubble-note session-history-bubble-note--direction">
+                          Extra direction: {extraDirection}
+                        </span>
+                      ) : null}
+                      {regenerateFeedback ? (
+                        <span className="session-history-bubble-note session-history-bubble-note--feedback">
+                          Regeneration feedback: {regenerateFeedback}
+                        </span>
+                      ) : null}
                     </div>
                   </div>
                   <div className="session-history-column session-history-column--llm">

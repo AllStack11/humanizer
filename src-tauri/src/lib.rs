@@ -414,6 +414,14 @@ fn clear_api_key(app: tauri::AppHandle, runtime: Option<RuntimeConfig>) -> Resul
   Ok(OkResponse { ok: true })
 }
 
+#[tauri::command]
+fn read_clipboard_text() -> Result<String, String> {
+  let mut clipboard = arboard::Clipboard::new().map_err(|e| format!("Failed to access clipboard: {e}"))?;
+  clipboard
+    .get_text()
+    .map_err(|e| format!("Failed to read clipboard text: {e}"))
+}
+
 fn app_data_backup_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
   let dir = app
     .path()
@@ -1221,6 +1229,7 @@ pub fn run() {
       get_api_key_status,
       set_api_key,
       clear_api_key,
+      read_clipboard_text,
       openrouter_chat,
       openrouter_chat_stream,
       get_styles_backup,

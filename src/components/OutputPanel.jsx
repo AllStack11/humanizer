@@ -382,7 +382,6 @@ export default function OutputPanel({
   const markdownHtml = useMemo(() => renderMarkdownToHtml(outputText), [outputText]);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedbackText, setFeedbackText] = useState("");
-  const [userInputOpen, setUserInputOpen] = useState(false);
   const [compareOpen, setCompareOpen] = useState(false);
   const streamStartMsRef = useRef(0);
   const streamPrevLengthRef = useRef(0);
@@ -458,31 +457,15 @@ export default function OutputPanel({
         ) : null}
 
         <div className={`output-stream-box-wrap${compareOpen ? " output-stream-box-wrap--compare" : ""}`}>
-          <div className={`output-source-card${compareOpen ? " output-source-card--compare" : ""}${userInputOpen ? " is-open" : ""}`} role="note" aria-label="Original user input">
+          <div className={`output-source-card${compareOpen ? " output-source-card--compare" : ""}`} role="note" aria-label="Original user input">
             <div className="output-source-head">
               <span className="text-mono output-source-badge">User text</span>
-              {!compareOpen ? (
-                <button
-                  type="button"
-                  className="output-source-toggle"
-                  onClick={() => setUserInputOpen((prev) => !prev)}
-                  aria-expanded={userInputOpen}
-                  aria-label={userInputOpen ? "Collapse user text" : "Expand user text"}
-                >
-                  <span>{userInputOpen ? "Hide" : "Show"}</span>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <polyline points={userInputOpen ? "18 15 12 9 6 15" : "6 9 12 15 18 9"} />
-                  </svg>
-                </button>
-              ) : null}
             </div>
-            {userInputOpen || compareOpen ? (
-              <p className="output-source-text">
-                {originalText?.trim()
-                  ? (compareOpen ? originalText.trim() : originalText.trim().slice(0, 220))
-                  : "No input provided"}
-              </p>
-            ) : null}
+            <p className="output-source-text">
+              {originalText?.trim()
+                ? (compareOpen ? originalText.trim() : originalText.trim().slice(0, 220))
+                : "No input provided"}
+            </p>
           </div>
           <div className="output-llm-column">
             <div className="output-stream-box-shell">

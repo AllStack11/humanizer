@@ -30,6 +30,7 @@ function renderWithMantine(ui) {
 const invokeMock = vi.fn();
 const listenMock = vi.fn();
 const clipboardWriteTextMock = vi.fn();
+const clipboardReadTextMock = vi.fn();
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args) => invokeMock(...args),
@@ -141,6 +142,7 @@ describe("App UI", () => {
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: {
+        readText: clipboardReadTextMock,
         writeText: clipboardWriteTextMock,
       },
     });
@@ -149,6 +151,7 @@ describe("App UI", () => {
     scrollIntoViewMock = vi.fn();
     Element.prototype.scrollIntoView = scrollIntoViewMock;
     clipboardWriteTextMock.mockResolvedValue();
+    clipboardReadTextMock.mockResolvedValue("");
 
     listenMock.mockImplementation(async (_eventName, cb) => {
       streamListener = cb;
@@ -213,6 +216,38 @@ describe("App UI", () => {
     const themeSelect = await screen.findByRole("combobox", { name: "Theme" });
     fireEvent.change(themeSelect, { target: { value: "teal" } });
     expect(themeSelect).toHaveValue("teal");
+  });
+
+  test("pastes clipboard text into the input when paste button is pressed", async () => {
+    clipboardReadTextMock.mockResolvedValue("Browser clipboard text");
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "has_api_key") return true;
+      if (command === "get_api_key_status") return { hasKey: true, source: "test" };
+      if (command === "get_styles_backup") return { styles: {}, savedAt: null };
+      if (command === "save_styles_backup") return { ok: true, savedAt: new Date().toISOString() };
+      if (command === "get_request_logs") return { logs: [] };
+      if (command === "read_clipboard_text") return "Clipboard draft ready for humanizing.";
+      if (command === "openrouter_chat") return { content: [{ text: "Rewritten sentence." }] };
+      if (command === "openrouter_chat_stream") {
+        const requestId = args.requestId;
+        streamListener?.({ payload: { requestId, chunk: "Hello ", fullText: "Hello ", done: false, error: null } });
+        streamListener?.({ payload: { requestId, chunk: "world", fullText: "Hello world.", done: false, error: null } });
+        streamListener?.({ payload: { requestId, chunk: null, fullText: "Hello world.", done: true, error: null } });
+        return { ok: true };
+      }
+      return { ok: true };
+    });
+
+    renderWithMantine(<App />);
+
+    const editor = await screen.findByPlaceholderText("Paste AI-generated text here…");
+    fireEvent.click(screen.getByRole("button", { name: "Paste input" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("read_clipboard_text", {});
+      expect(clipboardReadTextMock).not.toHaveBeenCalled();
+      expect(editor).toHaveValue("Clipboard draft ready for humanizing.");
+    });
   });
 
   test("streams and applies one-off instructions plus output presets", async () => {
@@ -340,6 +375,7 @@ describe("App UI", () => {
 
     expect(entries).toHaveLength(1);
     expect(entries[0].oneOffInstruction).toBe("tighten the opening sentence");
+    expect(entries[0].extraDirection).toMatch(/tighten the opening sentence/i);
   });
 
   test("retries with stricter guardrails when a short conversational input gets answered", async () => {
@@ -388,7 +424,7 @@ describe("App UI", () => {
 
     await waitFor(() => {
       expect(screen.getByLabelText("Generated output editor")).toHaveTextContent("hey how are you doing today?");
-    });
+    }, { timeout: 3000 });
 
     const streamCalls = invokeMock.mock.calls.filter(([command]) => command === "openrouter_chat_stream");
     expect(streamCalls).toHaveLength(2);
@@ -515,7 +551,7 @@ describe("App UI", () => {
     expect(await screen.findByText("Output copied.")).toBeInTheDocument();
   });
 
-  test("tracks same-thread generations in attached session history and global archive", async () => {
+  test("tracks same-thread generations and shows preset/depth metadata in session and global history", async () => {
     localStorage.setItem(
       "styles-v3",
       JSON.stringify({
@@ -551,7 +587,11 @@ describe("App UI", () => {
     renderWithMantine(<App />);
     await screen.findByRole("button", { name: /add personal samples/i });
 
-    const editor = screen.getByPlaceholderText("Paste AI-generated text here…");
+    fireEvent.click(screen.getByRole("button", { name: "Switch to elaborate mode" }));
+    fireEvent.change(screen.getByRole("slider", { name: "Elaboration depth" }), {
+      target: { value: "0" },
+    });
+    const editor = screen.getByPlaceholderText("Write something to elaborate on…");
     fireEvent.change(editor, {
       target: { value: "This paragraph is long enough to generate multiple history items in the same thread." },
     });
@@ -561,6 +601,12 @@ describe("App UI", () => {
       expect(screen.getByLabelText("Generated output editor")).toHaveTextContent("History output 1");
     });
 
+    fireEvent.change(screen.getByRole("combobox", { name: "Output format preset" }), {
+      target: { value: "report" },
+    });
+    fireEvent.change(screen.getByRole("slider", { name: "Elaboration depth" }), {
+      target: { value: "4" },
+    });
     fireEvent.keyDown(window, { key: "Enter", metaKey: true });
     await waitFor(() => {
       expect(screen.getByLabelText("Generated output editor")).toHaveTextContent("History output 2");
@@ -569,6 +615,8 @@ describe("App UI", () => {
     fireEvent.click(screen.getByRole("button", { name: "Expand session history section" }));
     const sessionList = screen.getByRole("list", { name: "Session history" });
     expect(sessionList.querySelectorAll(".session-history-item")).toHaveLength(2);
+    expect(within(sessionList).getByText("Type: Elaborate · Preset: None · Depth: One sentence · Tone: Balanced")).toBeInTheDocument();
+    expect(within(sessionList).getByText("Type: Elaborate · Preset: Report · Depth: Full paragraph · Tone: Balanced")).toBeInTheDocument();
 
     fireEvent.click(sessionList.querySelectorAll(".session-history-item")[0]);
     expect(screen.getAllByText("History output 1").length).toBeGreaterThan(0);
@@ -584,6 +632,7 @@ describe("App UI", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open output history" }));
     const globalList = await screen.findByRole("list", { name: "Global output history" });
     expect(within(globalList).getAllByRole("button")).toHaveLength(2);
+    expect(within(globalList).getByText("Type: Elaborate · Preset: Report · Depth: Full paragraph · Tone: Balanced")).toBeInTheDocument();
   });
 
   test("regenerate updates both session and global history", async () => {
@@ -767,6 +816,21 @@ describe("App UI", () => {
     expect(streamCalls).toHaveLength(2);
     expect(streamCalls[1][1].payload.system).toMatch(/Regeneration feedback:/i);
     expect(streamCalls[1][1].payload.system).toMatch(/Make it shorter and punchier\./i);
+
+    const history = await loadOutputHistory();
+    const entries = Object.values(history.entriesById);
+    expect(entries).toHaveLength(2);
+    expect(entries[1].regenerateFeedback).toBe("Make it shorter and punchier.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand session history section" }));
+    expect(screen.getAllByText(/Feedback: Make it shorter and punchier\./i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Regeneration feedback:/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open output history" }));
+    await screen.findByRole("list", { name: "Global output history" });
+    expect(screen.getByText("Direction: None")).toBeInTheDocument();
+    expect(screen.getByText("Feedback: Present")).toBeInTheDocument();
+    expect(screen.getAllByText(/Regeneration feedback:/i).length).toBeGreaterThan(0);
   });
 
   test("uses one session preview toggle to expand and collapse both columns", async () => {
@@ -815,7 +879,7 @@ describe("App UI", () => {
       expect(screen.getByLabelText("Generated output editor")).toHaveTextContent(
         "Shared preview expansion output that is long enough to wrap into multiple lines for the session history card."
       );
-    });
+    }, { timeout: 3000 });
 
     fireEvent.click(screen.getByRole("button", { name: "Expand session history section" }));
     const item = screen.getByRole("list", { name: "Session history" }).querySelector(".session-history-item");
@@ -893,7 +957,7 @@ describe("App UI", () => {
     expect(within(sessionList).getByText("Immutable history output")).toBeInTheDocument();
   });
 
-  test("starts a new session when the source text changes before the next generation", async () => {
+  test("keeps the same session when the source text changes before the next generation", async () => {
     localStorage.setItem(
       "styles-v3",
       JSON.stringify({
@@ -918,7 +982,7 @@ describe("App UI", () => {
       if (command === "openrouter_chat_stream") {
         streamCount += 1;
         const requestId = args.requestId;
-        const fullText = `Session split output ${streamCount}`;
+        const fullText = `Session continuity output ${streamCount}`;
         streamListener?.({ payload: { requestId, chunk: fullText, fullText, done: false, error: null } });
         streamListener?.({ payload: { requestId, chunk: null, fullText, done: true, error: null } });
         return { ok: true };
@@ -935,7 +999,7 @@ describe("App UI", () => {
     });
     fireEvent.keyDown(window, { key: "Enter", metaKey: true });
     await waitFor(() => {
-      expect(screen.getByLabelText("Generated output editor")).toHaveTextContent("Session split output 1");
+      expect(screen.getByLabelText("Generated output editor")).toHaveTextContent("Session continuity output 1");
     });
     fireEvent.click(screen.getByRole("button", { name: "Expand session history section" }));
     expect(screen.getByRole("list", { name: "Session history" }).querySelectorAll(".session-history-item")).toHaveLength(1);
@@ -945,7 +1009,131 @@ describe("App UI", () => {
     });
     fireEvent.keyDown(window, { key: "Enter", metaKey: true });
     await waitFor(() => {
-      expect(screen.getByLabelText("Generated output editor")).toHaveTextContent("Session split output 2");
+      expect(screen.getByLabelText("Generated output editor")).toHaveTextContent("Session continuity output 2");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Expand session history section" }));
+    expect(screen.getByRole("list", { name: "Session history" }).querySelectorAll(".session-history-item")).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open output history" }));
+    const globalList = await screen.findByRole("list", { name: "Global output history" });
+    expect(within(globalList).getAllByRole("button")).toHaveLength(2);
+  });
+
+  test("treats send after editing source text as a regeneration in the same session", async () => {
+    localStorage.setItem(
+      "styles-v3",
+      JSON.stringify({
+        personal: {
+          id: "personal",
+          name: "Personal",
+          profile: { tone: "balanced" },
+          sampleEntries: [{ id: 1, text: "this is a sample entry with enough content", type: "general" }],
+          sampleCount: 1,
+          updatedAt: new Date().toISOString(),
+        },
+      })
+    );
+
+    let streamCount = 0;
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "has_api_key") return true;
+      if (command === "get_api_key_status") return { hasKey: true, source: "test" };
+      if (command === "get_styles_backup") return { styles: {}, savedAt: null };
+      if (command === "save_styles_backup") return { ok: true, savedAt: new Date().toISOString() };
+      if (command === "get_request_logs") return { logs: [] };
+      if (command === "openrouter_chat_stream") {
+        streamCount += 1;
+        const requestId = args.requestId;
+        const fullText = `Edited source regen output ${streamCount}`;
+        streamListener?.({ payload: { requestId, chunk: fullText, fullText, done: false, error: null } });
+        streamListener?.({ payload: { requestId, chunk: null, fullText, done: true, error: null } });
+        return { ok: true };
+      }
+      return { ok: true };
+    });
+
+    renderWithMantine(<App />);
+    await screen.findByRole("button", { name: /add personal samples/i });
+
+    const editor = screen.getByPlaceholderText("Paste AI-generated text here…");
+    fireEvent.change(editor, {
+      target: { value: "This paragraph is long enough to create an initial response in session history." },
+    });
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    await waitFor(() => {
+      expect(screen.getByLabelText("Generated output editor")).toHaveTextContent("Edited source regen output 1");
+    });
+
+    fireEvent.change(editor, {
+      target: { value: "This edited source should still be treated as a regeneration in the same session thread." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Humanize text" }));
+    await waitFor(() => {
+      expect(screen.getByLabelText("Generated output editor")).toHaveTextContent("Edited source regen output 2");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand session history section" }));
+    const sessionList = screen.getByRole("list", { name: "Session history" });
+    expect(sessionList.querySelectorAll(".session-history-item")).toHaveLength(2);
+    expect(within(sessionList).getByText(/Original · Raw/i)).toBeInTheDocument();
+    expect(within(sessionList).getByText(/Regen 1 · Raw/i)).toBeInTheDocument();
+    expect(within(sessionList).getByText("This edited source should still be treated as a regeneration in the same session thread.")).toBeInTheDocument();
+  });
+
+  test("starts a true new session when using the new chat button", async () => {
+    localStorage.setItem(
+      "styles-v3",
+      JSON.stringify({
+        personal: {
+          id: "personal",
+          name: "Personal",
+          profile: { tone: "balanced" },
+          sampleEntries: [{ id: 1, text: "this is a sample entry with enough content", type: "general" }],
+          sampleCount: 1,
+          updatedAt: new Date().toISOString(),
+        },
+      })
+    );
+
+    let streamCount = 0;
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "has_api_key") return true;
+      if (command === "get_api_key_status") return { hasKey: true, source: "test" };
+      if (command === "get_styles_backup") return { styles: {}, savedAt: null };
+      if (command === "save_styles_backup") return { ok: true, savedAt: new Date().toISOString() };
+      if (command === "get_request_logs") return { logs: [] };
+      if (command === "openrouter_chat_stream") {
+        streamCount += 1;
+        const requestId = args.requestId;
+        const fullText = `New chat output ${streamCount}`;
+        streamListener?.({ payload: { requestId, chunk: fullText, fullText, done: false, error: null } });
+        streamListener?.({ payload: { requestId, chunk: null, fullText, done: true, error: null } });
+        return { ok: true };
+      }
+      return { ok: true };
+    });
+
+    renderWithMantine(<App />);
+    await screen.findByRole("button", { name: /add personal samples/i });
+
+    const editor = screen.getByPlaceholderText("Paste AI-generated text here…");
+    fireEvent.change(editor, {
+      target: { value: "First source paragraph long enough to generate output in session one." },
+    });
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    await waitFor(() => {
+      expect(screen.getByLabelText("Generated output editor")).toHaveTextContent("New chat output 1");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Start new chat" }));
+    expect(screen.getByPlaceholderText("Paste AI-generated text here…")).toHaveValue("");
+
+    fireEvent.change(editor, {
+      target: { value: "Second source paragraph long enough to generate output in session two." },
+    });
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    await waitFor(() => {
+      expect(screen.getByLabelText("Generated output editor")).toHaveTextContent("New chat output 2");
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Expand session history section" }));

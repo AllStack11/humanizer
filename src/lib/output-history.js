@@ -1,8 +1,15 @@
 import { load, save } from "./storage.js";
+import { ELAB_DEPTHS, OUTPUT_PRESET_OPTIONS, TONE_LEVELS } from "../constants/index.js";
 
 export const OUTPUT_HISTORY_KEY = "output-history-v2";
 export const OUTPUT_HISTORY_VERSION = 2;
 export const OUTPUT_HISTORY_UNSAVED_LIMIT = 50;
+
+const PRESET_LABEL_BY_VALUE = OUTPUT_PRESET_OPTIONS.reduce((map, option) => {
+  if (!option?.value) return map;
+  map[option.value] = option.label;
+  return map;
+}, {});
 
 function createId(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -13,7 +20,7 @@ export function normalizeSourceText(text) {
 }
 
 export function buildSessionThreadKey({ profileId, mode, sourceText }) {
-  return [profileId || "unknown", mode || "unknown", normalizeSourceText(sourceText)].join("::");
+  return [profileId || "unknown"].join("::");
 }
 
 export function buildHistoryTitle(sourceText, outputText) {
@@ -21,18 +28,72 @@ export function buildHistoryTitle(sourceText, outputText) {
   return sample ? sample.slice(0, 72) : "Untitled output";
 }
 
+export function buildHistoryUserSegments(entry) {
+  if (!entry || typeof entry !== "object") {
+    return {
+      sourceText: "",
+      extraDirection: "",
+      regenerateFeedback: "",
+    };
+  }
+
+  return {
+    sourceText: typeof entry.sourceText === "string" ? entry.sourceText.trim() : "",
+    extraDirection: typeof entry.extraDirection === "string"
+      ? entry.extraDirection.trim()
+      : (typeof entry.oneOffInstruction === "string" ? entry.oneOffInstruction.trim() : ""),
+    regenerateFeedback: typeof entry.regenerateFeedback === "string" ? entry.regenerateFeedback.trim() : "",
+  };
+}
+
 export function buildHistorySearchText(entry) {
+  const presetLabel = getHistoryPresetLabel(entry);
+  const depthLabel = getHistoryDepthLabel(entry);
+  const toneLabel = getHistoryToneLabel(entry);
+  const generationTypeLabel = getHistoryGenerationTypeLabel(entry);
   return [
     entry.title,
-    entry.sourceText,
+    buildHistoryUserText(entry),
     entry.baseOutputText,
     entry.currentOutputText,
+    entry.oneOffInstruction,
+    entry.extraDirection,
+    entry.regenerateFeedback,
+    entry.formatPreset,
+    entry.toneLevel,
+    presetLabel,
+    depthLabel,
+    toneLabel,
+    generationTypeLabel,
     entry.model,
     entry.mode,
   ]
     .filter(Boolean)
     .join("\n")
     .toLowerCase();
+}
+
+export function getHistoryPresetLabel(entry) {
+  const value = typeof entry?.formatPreset === "string" ? entry.formatPreset : "none";
+  return PRESET_LABEL_BY_VALUE[value] || PRESET_LABEL_BY_VALUE.none || "No preset";
+}
+
+export function getHistoryDepthLabel(entry) {
+  const fallbackIndex = 2;
+  const rawDepth = Number.isFinite(entry?.elabDepth) ? Number(entry.elabDepth) : fallbackIndex;
+  const clampedDepth = Math.max(0, Math.min(rawDepth, ELAB_DEPTHS.length - 1));
+  return ELAB_DEPTHS[clampedDepth]?.label || ELAB_DEPTHS[fallbackIndex]?.label || "Standard";
+}
+
+export function getHistoryToneLabel(entry) {
+  const fallbackIndex = 2;
+  const rawTone = Number.isFinite(entry?.toneLevel) ? Number(entry.toneLevel) : fallbackIndex;
+  const clampedTone = Math.max(0, Math.min(rawTone, TONE_LEVELS.length - 1));
+  return TONE_LEVELS[clampedTone]?.label || TONE_LEVELS[fallbackIndex]?.label || "Balanced";
+}
+
+export function getHistoryGenerationTypeLabel(entry) {
+  return entry?.mode === "elaborate" ? "Elaborate" : "Humanize";
 }
 
 export function createEmptyOutputHistory() {
@@ -56,6 +117,8 @@ function normalizeEntry(raw) {
     mode: raw.mode === "elaborate" ? "elaborate" : "humanize",
     model: typeof raw.model === "string" ? raw.model : "",
     sourceText: typeof raw.sourceText === "string" ? raw.sourceText : "",
+    extraDirection: typeof raw.extraDirection === "string" ? raw.extraDirection : "",
+    regenerateFeedback: typeof raw.regenerateFeedback === "string" ? raw.regenerateFeedback : "",
     baseOutputText: typeof raw.baseOutputText === "string" ? raw.baseOutputText : "",
     currentOutputText: typeof raw.currentOutputText === "string" ? raw.currentOutputText : "",
     oneOffInstruction: typeof raw.oneOffInstruction === "string" ? raw.oneOffInstruction : "",
@@ -71,6 +134,14 @@ function normalizeEntry(raw) {
     isSaved: typeof raw.isSaved === "boolean" ? raw.isSaved : false,
     savedAt: typeof raw.savedAt === "string" ? raw.savedAt : null,
   };
+}
+
+export function buildHistoryUserText(entry) {
+  const { sourceText, extraDirection, regenerateFeedback } = buildHistoryUserSegments(entry);
+  const parts = [sourceText];
+  if (extraDirection) parts.push(`Extra direction:\n${extraDirection}`);
+  if (regenerateFeedback) parts.push(`Regeneration feedback:\n${regenerateFeedback}`);
+  return parts.filter(Boolean).join("\n\n").trim();
 }
 
 function normalizeSession(raw) {
@@ -140,19 +211,45 @@ export async function saveOutputHistory(state) {
   return normalized;
 }
 
-export function getOrCreateActiveSession(historyState, profileId, sessionSeed, currentSessionId = null) {
+export function getOrCreateActiveSession(historyState, profileId, sessionSeed, currentSessionId = null, options = {}) {
   const state = normalizeOutputHistory(historyState);
+  if (options?.forceCreate) {
+    const now = new Date().toISOString();
+    const forcedSession = {
+      id: createId("session"),
+      profileId,
+      startedAt: now,
+      updatedAt: now,
+      mode: sessionSeed.mode,
+      sourceTextSnapshot: sessionSeed.sourceTextSnapshot,
+      threadKey: sessionSeed.threadKey,
+      entryIds: [],
+      activeEntryId: null,
+    };
+
+    return {
+      state: {
+        ...state,
+        sessionsById: {
+          ...state.sessionsById,
+          [forcedSession.id]: forcedSession,
+        },
+      },
+      session: forcedSession,
+      created: true,
+    };
+  }
+
   const currentSession = currentSessionId ? state.sessionsById[currentSessionId] : null;
   if (
     currentSession &&
-    currentSession.profileId === profileId &&
-    currentSession.threadKey === sessionSeed.threadKey
+    currentSession.profileId === profileId
   ) {
     return { state, session: currentSession, created: false };
   }
 
   const matchingSession = Object.values(state.sessionsById)
-    .filter((session) => session.profileId === profileId && session.threadKey === sessionSeed.threadKey)
+    .filter((session) => session.profileId === profileId)
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0];
 
   if (matchingSession) {
