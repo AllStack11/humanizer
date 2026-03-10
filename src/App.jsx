@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 
 // Constants
 import {
@@ -29,7 +29,6 @@ import {
   pruneUnsavedEntries,
   saveOutputHistory,
   searchHistoryEntries,
-  toggleSavedHistoryEntry,
   updateHistoryEntry,
   deleteHistoryEntry,
   deleteHistoryEntriesForProfile,
@@ -70,6 +69,7 @@ import ProcessLogPanel from './components/ProcessLogPanel.jsx';
 import MergeProgressModal from './components/MergeProgressModal.jsx';
 import OutputHistoryDrawer from './components/OutputHistoryDrawer.jsx';
 import { Drawer } from "@mantine/core";
+import { useReducedMotion } from "@mantine/hooks";
 import { Button } from "./components/AppUI.jsx";
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
@@ -190,6 +190,8 @@ export default function App() {
   const [apiUrlInput, setApiUrlInput] = useState("");
   const [apiKeyFileInput, setApiKeyFileInput] = useState("");
   const [runtimeConfig, setRuntimeConfig] = useState({ apiUrl: "", apiKeyFile: "" });
+  const prefersReducedMotion = useReducedMotion();
+  const isTestEnv = import.meta.env.MODE === "test";
 
   useEffect(() => {
     historyStateRef.current = historyState;
@@ -300,6 +302,34 @@ export default function App() {
     const activeEntry = historyStateRef.current.entriesById[activeHistoryEntryId];
     if (!activeEntry?.sessionId) return null;
     return historyStateRef.current.sessionsById[activeEntry.sessionId] ? activeEntry.sessionId : null;
+  }
+
+  function buildSessionContextBlock(sessionId, { maxTurns = 6 } = {}) {
+    if (!sessionId) return "";
+    const entries = listSessionEntries(historyStateRef.current, sessionId);
+    if (!entries.length) return "";
+
+    const turns = entries
+      .slice(Math.max(0, entries.length - maxTurns))
+      .map((entry, index) => {
+        const userText = buildHistoryUserText(entry);
+        const modelText = String(entry.baseOutputText || "").trim();
+        const safeUserText = userText || "(empty)";
+        const safeModelText = modelText || "(empty)";
+        return [
+          `Turn ${index + 1} User:`,
+          safeUserText,
+          `Turn ${index + 1} Assistant:`,
+          safeModelText,
+        ].join("\n");
+      });
+
+    if (!turns.length) return "";
+    return [
+      "Session memory:",
+      "Use the following prior turns as context for this same ongoing session, even if generation mode changed.",
+      turns.join("\n\n"),
+    ].join("\n\n");
   }
 
   function recordCompletedOutput(nextOutput, { sessionIdOverride = null, regenerateFeedback = "" } = {}) {
@@ -1039,11 +1069,6 @@ export default function App() {
     elaborate({ regenerateFeedback: trimmedFeedback });
   }
 
-  function copyHistoryEntry(entry) {
-    if (!entry) return;
-    copyTextToClipboard(entry.currentOutputText, "History entry copied.");
-  }
-
   function openGlobalHistory() {
     setGlobalHistoryQuery("");
     setGlobalHistoryFilters({
@@ -1063,26 +1088,17 @@ export default function App() {
     copyTextToClipboard(text, part === "user" ? "User text copied." : "Model text copied.");
   }
 
-  function toggleHistorySaved(entry) {
-    if (!entry) return;
-    commitHistoryState((prev) => toggleSavedHistoryEntry(prev, entry.id, !entry.isSaved));
-  }
-
-  function renameHistoryEntry(entry) {
-    if (!entry) return;
-    const nextTitle = window.prompt("Rename history entry", entry.title || "");
-    if (nextTitle == null) return;
-    const trimmed = nextTitle.trim();
-    if (!trimmed) return;
-    commitHistoryState((prev) => updateHistoryEntry(prev, entry.id, { title: trimmed }));
-  }
-
   function removeHistoryEntry(entry) {
     if (!entry) return;
-    const confirmed = window.confirm("Delete this history entry?");
-    if (!confirmed) return;
+
+    const visibleEntryIds = globalHistoryEntries.map((item) => item.id);
+    const currentIndex = visibleEntryIds.indexOf(entry.id);
+    const nextSelectedEntryId = currentIndex > 0
+      ? visibleEntryIds[currentIndex - 1]
+      : visibleEntryIds[1] || null;
+
+    setSelectedGlobalHistoryEntryId(nextSelectedEntryId);
     commitHistoryState((prev) => deleteHistoryEntry(prev, entry.id));
-    if (selectedGlobalHistoryEntryId === entry.id) setSelectedGlobalHistoryEntryId(null);
     if (selectedHistoryPreviewEntryId === entry.id) setSelectedHistoryPreviewEntryId(null);
     if (activeHistoryEntryId === entry.id) setActiveHistoryEntryId(null);
   }
@@ -1105,7 +1121,8 @@ export default function App() {
       const feedbackPrompt = regenerateFeedback.trim()
         ? `Regeneration feedback:\n- ${regenerateFeedback.trim()}\n- Keep the same source intent while applying this feedback.`
         : "";
-      const baseSystemPrompt = [basePrompt, feedbackPrompt].filter(Boolean).join("\n\n");
+      const sessionContextBlock = buildSessionContextBlock(sessionIdOverride);
+      const baseSystemPrompt = [basePrompt, sessionContextBlock, feedbackPrompt].filter(Boolean).join("\n\n");
       const streamRewrite = async (systemPrompt, userPrompt, firstChunkMessage) => {
         startOutputStream();
         let loggedFirstChunk = false;
@@ -1185,11 +1202,12 @@ export default function App() {
       pushProcessStep("Preparing prompt and opening model stream.");
       let loggedFirstChunk = false;
       const basePrompt = applyPromptDecorators(ELABORATE_SYS(activeProfile.profile, toneLevel, elabDepth));
+      const sessionContextBlock = buildSessionContextBlock(sessionIdOverride);
       const feedbackPrompt = regenerateFeedback.trim()
         ? `Regeneration feedback:\n- ${regenerateFeedback.trim()}\n- Keep the same source intent while applying this feedback.`
         : "";
       const out = await llmStream(
-        [basePrompt, feedbackPrompt].filter(Boolean).join("\n\n"),
+        [basePrompt, sessionContextBlock, feedbackPrompt].filter(Boolean).join("\n\n"),
         `Elaborate on:\n\n${sourceText}`,
         (_, full) => {
           if (!loggedFirstChunk) {
@@ -1238,7 +1256,7 @@ export default function App() {
     : [];
   const globalHistoryEntries = searchHistoryEntries(historyState, globalHistoryQuery, globalHistoryFilters);
   const selectedGlobalHistoryEntry = selectedGlobalHistoryEntryId
-    ? historyState.entriesById[selectedGlobalHistoryEntryId] || null
+    ? globalHistoryEntries.find((entry) => entry.id === selectedGlobalHistoryEntryId) || null
     : globalHistoryEntries[0] || null;
   const historyProfileOptions = PROFILE_OPTIONS.map((profile) => ({
     value: profile.id,
@@ -1254,10 +1272,10 @@ export default function App() {
       setSelectedGlobalHistoryEntryId(null);
       return;
     }
-    if (!selectedGlobalHistoryEntryId || !historyState.entriesById[selectedGlobalHistoryEntryId]) {
+    if (!selectedGlobalHistoryEntryId || !globalHistoryEntries.some((entry) => entry.id === selectedGlobalHistoryEntryId)) {
       setSelectedGlobalHistoryEntryId(globalHistoryEntries[0].id);
     }
-  }, [globalHistoryEntries, selectedGlobalHistoryEntryId, historyState.entriesById]);
+  }, [globalHistoryEntries, selectedGlobalHistoryEntryId]);
 
   useEffect(() => {
     if (!sessionEntries.length) {
@@ -1291,8 +1309,8 @@ export default function App() {
   };
 
   const handleModeChange = (m) => {
+    if (m === mode) return;
     setMode(m);
-    clearOutputState();
   };
 
   useEffect(() => {
@@ -1312,6 +1330,8 @@ export default function App() {
 
   const hasCompletedOutput = outputPhase === "ready" && outputText.trim().length > 0;
   const isStreamingOutput = outputPhase === "streaming";
+  const hasSessionHistory = sessionEntries.length > 0;
+  const shouldShowOutputPanel = isStreamingOutput || hasCompletedOutput || hasSessionHistory;
   const outputEdited = hasCompletedOutput && outputText !== outputBaseline;
   const metricSnapshotBefore = computeTextMetricSnapshot(inputText);
   const metricSnapshotAfter = computeTextMetricSnapshot(outputText);
@@ -1321,6 +1341,11 @@ export default function App() {
   const activeTheme = APP_THEME_OPTIONS.find((theme) => theme.value === themeKey) || APP_THEME_OPTIONS[0];
   const requestProgressLabel = status || processSummary || (mode === "humanize" ? "Rewriting in your voice..." : "Expanding your writing...");
   const requestProgressTone = processError ? "error" : processNeedsApiKey ? "warning" : "neutral";
+  const drawerTransitionProps = useMemo(() => ({
+    transition: "slide-left",
+    duration: prefersReducedMotion || isTestEnv ? 0 : 600,
+    timingFunction: prefersReducedMotion || isTestEnv ? "linear" : "cubic-bezier(0.22, 1, 0.36, 1)",
+  }), [prefersReducedMotion, isTestEnv]);
 
   return (
     <div className="app-root" style={{ "--accent": activeTheme.accent }} data-theme={activeTheme.value}>
@@ -1335,7 +1360,6 @@ export default function App() {
         backupError={backupError}
         onRetryBackup={() => saveStylesBackupWithRetry(styles)}
         onOpenStyleModal={() => setStyleModalOpen(true)}
-        onOpenHistory={openGlobalHistory}
         onOpenManagement={() => setManagementOpen(true)}
       />
 
@@ -1362,8 +1386,8 @@ export default function App() {
       <main className="app-shell panel-grid app-workspace">
 
         <section className="app-primary-column">
-          <div className={`app-editor-stack${isStreamingOutput || hasCompletedOutput ? " app-editor-stack--with-output" : ""}`}>
-            <div className={`app-editor-sticky${isStreamingOutput || hasCompletedOutput ? " app-editor-sticky--with-output" : ""}`}>
+          <div className={`app-editor-stack${shouldShowOutputPanel ? " app-editor-stack--with-output" : ""}`}>
+            <div className={`app-editor-sticky${shouldShowOutputPanel ? " app-editor-sticky--with-output" : ""}`}>
               <WriterPanel
                 inputText={inputText}
                 onChange={handleInputChange}
@@ -1393,7 +1417,7 @@ export default function App() {
                 onSubmit={mode === "humanize" ? humanize : elaborate}
               />
             </div>
-            {isStreamingOutput || hasCompletedOutput ? (
+            {shouldShowOutputPanel ? (
               <section ref={outputPanelRef} className="app-inline-output-panel">
                 <OutputPanel
                   mode={mode}
@@ -1425,6 +1449,22 @@ export default function App() {
       </main>
 
       <Button
+        className="history-fab"
+        color={globalHistoryOpen ? "primary" : "default"}
+        variant={globalHistoryOpen ? "solid" : "bordered"}
+        onPress={openGlobalHistory}
+        aria-label="Open output history"
+        tooltip="Open the full response archive"
+        iconOnly
+      >
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M3 12a9 9 0 1 0 3-6.7" />
+          <path d="M3 4v5h5" />
+          <path d="M12 7v5l3 2" />
+        </svg>
+      </Button>
+
+      <Button
         className="logs-fab"
         color={logsOpen || processSteps.length ? "primary" : "default"}
         variant={logsOpen || processSteps.length ? "solid" : "bordered"}
@@ -1433,20 +1473,17 @@ export default function App() {
         tooltip="Open logs"
         iconOnly
       >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="M8 6h13" />
-          <path d="M8 12h13" />
-          <path d="M8 18h13" />
-          <path d="M3 6h.01" />
-          <path d="M3 12h.01" />
-          <path d="M3 18h.01" />
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <circle cx="12" cy="5" r="2" />
+          <circle cx="12" cy="12" r="2" />
+          <circle cx="12" cy="19" r="2" />
         </svg>
       </Button>
 
       <Drawer
         opened={globalHistoryOpen}
         onClose={() => setGlobalHistoryOpen(false)}
-        position="right"
+        position="left"
         size={860}
         offset={20}
         zIndex={395}
@@ -1457,7 +1494,7 @@ export default function App() {
           body: "panel-grid editor-settings-drawer-body",
         }}
         overlayProps={{ backgroundOpacity: 0.16, blur: 4 }}
-        transitionProps={{ duration: 0 }}
+        transitionProps={{ ...drawerTransitionProps, transition: "slide-right" }}
       >
         <OutputHistoryDrawer
           entries={globalHistoryEntries}
@@ -1469,9 +1506,6 @@ export default function App() {
           profileOptions={historyProfileOptions}
           modelOptions={historyModelOptions}
           onSelectEntry={setSelectedGlobalHistoryEntryId}
-          onCopyEntry={copyHistoryEntry}
-          onToggleSaved={toggleHistorySaved}
-          onRenameEntry={renameHistoryEntry}
           onDeleteEntry={removeHistoryEntry}
         />
       </Drawer>
@@ -1490,7 +1524,7 @@ export default function App() {
           body: "panel-grid editor-settings-drawer-body logs-drawer-body",
         }}
         overlayProps={{ backgroundOpacity: 0.14, blur: 3 }}
-        transitionProps={{ duration: 0 }}
+        transitionProps={drawerTransitionProps}
       >
         <section className="panel-grid">
           <div className="text-mono logs-section-label">Process</div>
@@ -1527,7 +1561,7 @@ export default function App() {
           body: "panel-grid editor-settings-drawer-body",
         }}
         overlayProps={{ backgroundOpacity: 0.18, blur: 4 }}
-        transitionProps={{ duration: 0 }}
+        transitionProps={drawerTransitionProps}
       >
         <ManagementPanel
           themeKey={themeKey}

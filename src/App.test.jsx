@@ -1019,6 +1019,169 @@ describe("App UI", () => {
     expect(within(globalList).getAllByRole("button")).toHaveLength(2);
   });
 
+  test("keeps session history and carries session context when switching generation type", async () => {
+    localStorage.setItem(
+      "styles-v3",
+      JSON.stringify({
+        personal: {
+          id: "personal",
+          name: "Personal",
+          profile: { tone: "balanced" },
+          sampleEntries: [{ id: 1, text: "this is a sample entry with enough content", type: "general" }],
+          sampleCount: 1,
+          updatedAt: new Date().toISOString(),
+        },
+      })
+    );
+
+    let streamCount = 0;
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "has_api_key") return true;
+      if (command === "get_api_key_status") return { hasKey: true, source: "test" };
+      if (command === "get_styles_backup") return { styles: {}, savedAt: null };
+      if (command === "save_styles_backup") return { ok: true, savedAt: new Date().toISOString() };
+      if (command === "get_request_logs") return { logs: [] };
+      if (command === "openrouter_chat_stream") {
+        streamCount += 1;
+        const requestId = args.requestId;
+        const fullText = `Mode switch continuity output ${streamCount}`;
+        streamListener?.({ payload: { requestId, chunk: fullText, fullText, done: false, error: null } });
+        streamListener?.({ payload: { requestId, chunk: null, fullText, done: true, error: null } });
+        return { ok: true };
+      }
+      return { ok: true };
+    });
+
+    renderWithMantine(<App />);
+    await screen.findByRole("button", { name: /add personal samples/i });
+
+    const humanizeInput = "First humanize input with enough length to create the initial turn.";
+    fireEvent.change(screen.getByPlaceholderText("Paste AI-generated text here…"), {
+      target: { value: humanizeInput },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Humanize text" }));
+    await waitFor(() => {
+      expect(screen.getByLabelText("Generated output editor")).toHaveTextContent("Mode switch continuity output 1");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Switch to elaborate mode" }));
+    fireEvent.change(screen.getByPlaceholderText("Write something to elaborate on…"), {
+      target: { value: "Second elaborate input with enough length to continue the same session thread." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Elaborate text" }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Generated output editor")).toHaveTextContent("Mode switch continuity output 2");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand session history section" }));
+    const sessionList = screen.getByRole("list", { name: "Session history" });
+    expect(sessionList.querySelectorAll(".session-history-item")).toHaveLength(2);
+
+    const streamCalls = invokeMock.mock.calls.filter(([command]) => command === "openrouter_chat_stream");
+    expect(streamCalls).toHaveLength(2);
+    expect(streamCalls[1][1].payload.system).toContain("Session memory:");
+    expect(streamCalls[1][1].payload.system).toContain(humanizeInput);
+    expect(streamCalls[1][1].payload.system).toContain("Mode switch continuity output 1");
+  });
+
+  test("keeps session history panel visible after switching generation type", async () => {
+    localStorage.setItem(
+      "styles-v3",
+      JSON.stringify({
+        personal: {
+          id: "personal",
+          name: "Personal",
+          profile: { tone: "balanced" },
+          sampleEntries: [{ id: 1, text: "this is a sample entry with enough content", type: "general" }],
+          sampleCount: 1,
+          updatedAt: new Date().toISOString(),
+        },
+      })
+    );
+
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "has_api_key") return true;
+      if (command === "get_api_key_status") return { hasKey: true, source: "test" };
+      if (command === "get_styles_backup") return { styles: {}, savedAt: null };
+      if (command === "save_styles_backup") return { ok: true, savedAt: new Date().toISOString() };
+      if (command === "get_request_logs") return { logs: [] };
+      if (command === "openrouter_chat_stream") {
+        const requestId = args.requestId;
+        const fullText = "Single session output";
+        streamListener?.({ payload: { requestId, chunk: fullText, fullText, done: false, error: null } });
+        streamListener?.({ payload: { requestId, chunk: null, fullText, done: true, error: null } });
+        return { ok: true };
+      }
+      return { ok: true };
+    });
+
+    renderWithMantine(<App />);
+    await screen.findByRole("button", { name: /add personal samples/i });
+
+    fireEvent.change(screen.getByPlaceholderText("Paste AI-generated text here…"), {
+      target: { value: "Initial humanize input with enough characters to create one history turn." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Humanize text" }));
+    await waitFor(() => {
+      expect(screen.getByLabelText("Generated output editor")).toHaveTextContent("Single session output");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Switch to elaborate mode" }));
+    fireEvent.click(screen.getByRole("button", { name: "Expand session history section" }));
+
+    const sessionList = screen.getByRole("list", { name: "Session history" });
+    expect(sessionList.querySelectorAll(".session-history-item")).toHaveLength(1);
+  });
+
+  test("keeps generated output visible after switching generation type", async () => {
+    localStorage.setItem(
+      "styles-v3",
+      JSON.stringify({
+        personal: {
+          id: "personal",
+          name: "Personal",
+          profile: { tone: "balanced" },
+          sampleEntries: [{ id: 1, text: "this is a sample entry with enough content", type: "general" }],
+          sampleCount: 1,
+          updatedAt: new Date().toISOString(),
+        },
+      })
+    );
+
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "has_api_key") return true;
+      if (command === "get_api_key_status") return { hasKey: true, source: "test" };
+      if (command === "get_styles_backup") return { styles: {}, savedAt: null };
+      if (command === "save_styles_backup") return { ok: true, savedAt: new Date().toISOString() };
+      if (command === "get_request_logs") return { logs: [] };
+      if (command === "openrouter_chat_stream") {
+        const requestId = args.requestId;
+        const fullText = "Persistent LLM output across mode switch";
+        streamListener?.({ payload: { requestId, chunk: fullText, fullText, done: false, error: null } });
+        streamListener?.({ payload: { requestId, chunk: null, fullText, done: true, error: null } });
+        return { ok: true };
+      }
+      return { ok: true };
+    });
+
+    renderWithMantine(<App />);
+    await screen.findByRole("button", { name: /add personal samples/i });
+
+    fireEvent.change(screen.getByPlaceholderText("Paste AI-generated text here…"), {
+      target: { value: "Initial humanize source text long enough for a valid rewrite request." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Humanize text" }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Generated output editor")).toHaveTextContent("Persistent LLM output across mode switch");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Switch to elaborate mode" }));
+
+    expect(screen.getByLabelText("Generated output editor")).toHaveTextContent("Persistent LLM output across mode switch");
+  });
+
   test("treats send after editing source text as a regeneration in the same session", async () => {
     localStorage.setItem(
       "styles-v3",
@@ -1144,7 +1307,7 @@ describe("App UI", () => {
     expect(within(globalList).getAllByRole("button")).toHaveLength(2);
   });
 
-  test("supports saving, searching, and deleting entries from the global archive", async () => {
+  test("supports deleting the selected entry from global response detail", async () => {
     localStorage.setItem(
       "styles-v3",
       JSON.stringify({
@@ -1158,10 +1321,6 @@ describe("App UI", () => {
         },
       })
     );
-
-    const promptMock = vi.spyOn(window, "prompt").mockReturnValue("Renamed output");
-    const confirmMock = vi.spyOn(window, "confirm").mockReturnValue(true);
-
     invokeMock.mockImplementation(async (command, args) => {
       if (command === "has_api_key") return true;
       if (command === "get_api_key_status") return { hasKey: true, source: "test" };
@@ -1192,22 +1351,12 @@ describe("App UI", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open output history" }));
     await screen.findByRole("list", { name: "Global output history" });
 
-    fireEvent.click(screen.getByRole("button", { name: "Save selected history entry" }));
-    expect(screen.getByRole("button", { name: "Unsave selected history entry" })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Rename selected history entry" }));
-    expect(screen.getAllByText("Renamed output").length).toBeGreaterThan(0);
-
-    fireEvent.change(screen.getByRole("textbox", { name: "History search" }), {
-      target: { value: "Renamed" },
-    });
-    expect(within(screen.getByRole("list", { name: "Global output history" })).getAllByRole("button")).toHaveLength(1);
-
+    expect(screen.queryByRole("button", { name: "Copy selected history entry" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save selected history entry" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Unsave selected history entry" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Rename selected history entry" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Delete selected history entry" }));
     expect(await screen.findByText("No history entries match the current filters.")).toBeInTheDocument();
-
-    promptMock.mockRestore();
-    confirmMock.mockRestore();
   });
 
   test("loads persisted history into the global archive on startup and filters by profile", async () => {
